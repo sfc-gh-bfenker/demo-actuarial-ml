@@ -225,6 +225,7 @@ def train(
     session: Session,
     ds_version: str = "1",
     model_version: str = "v1",
+    n_estimators: int = 200,
 ) -> None:
     """Run the end-to-end actuarial GBM training pipeline.
 
@@ -262,6 +263,10 @@ def train(
                        in the Model Registry.  Defaults to the
                        ``SNOWFLAKE_SERVICE_NAME`` env var when run as an
                        ML Job (auto-unique per submission).
+        n_estimators:  Number of boosting rounds for XGBoost.  Increase for
+                       potentially better accuracy at the cost of longer
+                       training time.  Logged as a hyperparameter so runs
+                       with different values are comparable in Snowsight.
 
     Note:
         Do NOT call ``session.use_warehouse()`` inside this function.  When
@@ -321,7 +326,7 @@ def train(
         # displayed in the Parameters tab in Snowsight and are included in the
         # run comparison table when evaluating multiple experiments.
         hparams = dict(
-            n_estimators=200,
+            n_estimators=n_estimators,
             learning_rate=0.05,
             max_leaves=31,
             objective="reg:squarederror",
@@ -463,7 +468,19 @@ if __name__ == "__main__":
         default=default_version,
         help="Experiment run name / Model Registry version",
     )
+    parser.add_argument(
+        "--n-estimators",
+        type=int,
+        default=200,
+        dest="n_estimators",
+        help="Number of XGBoost boosting rounds (default: 200).",
+    )
     args = parser.parse_args()
 
     session = _get_session()
-    train(session, ds_version=args.ds_version, model_version=args.model_version)
+    train(
+        session,
+        ds_version=args.ds_version,
+        model_version=args.model_version,
+        n_estimators=args.n_estimators,
+    )
