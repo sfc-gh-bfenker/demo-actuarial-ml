@@ -14,9 +14,9 @@ Docs:
 """
 
 # ── Snowflake environment ─────────────────────────────────────────────────────
-DATABASE = "COUNTRY_ML"  # Target database
+DATABASE = "COUNTRY_BANK_DEMO_DB"  # Target database
 SCHEMA = "ACTUARIAL_PRICING"  # Target schema
-ROLE = "CUSTOMER_ROLE"  # Role used for all operations
+ROLE = "COUNTRY_BANK_DEMO_ROLE"  # Role used for all operations
 WAREHOUSE = "COMPUTE_WH"  # Virtual warehouse for SQL compute
 COMPUTE_POOL = "DEMO_POOL"  # Compute pool for ML Jobs and batch inference
 
