@@ -70,9 +70,9 @@ EXPERIMENT = "ACTUARIAL_GBM_TRAINING"
 # NOTE: train.py runs as a standalone file inside a Snowflake ML Job container
 # and cannot import from config.py.  Update these constants directly when
 # changing environments.  See config.py for the local-script equivalents.
-DATABASE = "COUNTRY_ML"
+DATABASE = "COUNTRY_BANK_DEMO_DB"
 SCHEMA = "ACTUARIAL_PRICING"
-ROLE = "CUSTOMER_ROLE"
+ROLE = "COUNTRY_BANK_DEMO_ROLE"
 WAREHOUSE = "COMPUTE_WH"
 
 
