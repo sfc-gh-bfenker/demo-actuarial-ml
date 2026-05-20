@@ -1,0 +1,37 @@
+[project]
+name = "country-bank-demo"
+version = "0.1.0"
+description = "Homeowners insurance actuarial pricing demo — GLM/GBM with Snowflake"
+requires-python = ">=3.11"
+
+dependencies = [
+    # numerics + ML
+    "numpy==2.4.4",
+    "pandas>=2.0",
+    "matplotlib>=3.9",
+    "scikit-learn>=1.5",
+    "statsmodels>=0.14",
+    # Snowflake — connector brings write_pandas + pd.read_sql support via [pandas] extra
+    "snowflake-connector-python[pandas]>=3.12",
+    "snowflake-snowpark-python>=1.20",
+    # Snowpark Connect for Apache Spark — run PySpark code on Snowflake compute
+    "pyspark==3.5.6",     # must match snowpark-connect's bundled Spark 3.5.6 server
+    "snowpark-connect>=1.0",
+    "zstandard>=0.25.0",   # required by pyspark Spark Connect
+    "snowflake-ml-python>=1.39.0",
+    "altair>=6.1.0",
+]
+
+[dependency-groups]
+# install with: uv sync --group dev
+dev = [
+    "ipykernel>=6.29",   # run notebook in VS Code / Jupyter Lab
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+# scripts-only project — do not attempt to build/install as a Python package
+package = false
