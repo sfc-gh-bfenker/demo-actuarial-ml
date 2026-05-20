@@ -204,7 +204,6 @@ function. This works because `train.py` registers models with
 | `create-table.sql` | Pure-SQL data loading from XML stage |
 | `load_actuarial_data.py` | Downloads freMTPL2 and uploads as XML (run locally) |
 | `helpers.py` | `lorenz_curve` and `double_lift_chart` plotting utilities |
-| `hands-on.md` | Guided exercises with Cortex Code prompts for interactive sessions |
 
 ---
 
@@ -216,3 +215,4 @@ function. This works because `train.py` registers models with
 | `Stages cannot currently be created in a personal database` | `submit_file` trying to create the payload stage in a personal DB | Pre-create the stage in your schema; use a fully-qualified `stage_name` |
 | `USE WAREHOUSE` rejected in ML Job | `USE WAREHOUSE` is blocked inside SPCS containers | Pass `query_warehouse=WAREHOUSE` to `submit_file`; do not call `use_warehouse()` in the script |
 | `Object does not exist` on `USE WAREHOUSE` | Job session role doesn't have USAGE on the warehouse | `GRANT USAGE ON WAREHOUSE <wh> TO ROLE <role>` |
+
