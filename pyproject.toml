@@ -27,6 +27,7 @@ dependencies = [
 dev = [
     "black>=26.5.1",
     "ipykernel>=6.29",   # run notebook in VS Code / Jupyter Lab
+    "nbstripout>=0.9.1",
 ]
 
 [build-system]
