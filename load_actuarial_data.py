@@ -42,43 +42,43 @@ ssl._create_default_https_context = ssl._create_unverified_context
 from sklearn.datasets import fetch_openml  # noqa: E402 (import after ssl patch)
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-DEFAULT_ACCOUNT          = "SFSENORTHAMERICA-BFENKER_AWS1"
-DEFAULT_USER             = "BFENKER"
-DEFAULT_ROLE             = "COUNTRY_BANK_DEMO_ROLE"
-DEFAULT_WAREHOUSE        = "COMPUTE_WH"
-DEFAULT_DATABASE         = "COUNTRY_BANK_DEMO_DB"
-DEFAULT_SCHEMA           = "ACTUARIAL_PRICING"
+DEFAULT_ACCOUNT = "SFSENORTHAMERICA-BFENKER_AWS1"
+DEFAULT_USER = "BFENKER"
+DEFAULT_ROLE = "COUNTRY_BANK_DEMO_ROLE"
+DEFAULT_WAREHOUSE = "COMPUTE_WH"
+DEFAULT_DATABASE = "COUNTRY_BANK_DEMO_DB"
+DEFAULT_SCHEMA = "ACTUARIAL_PRICING"
 DEFAULT_PRIVATE_KEY_FILE = "/Users/bfenker/.snowflake/rsa_key.p8"
 
 # ── Column rename maps ────────────────────────────────────────────────────────
 FREQ_RENAME = {
-    "IDpol":      "POLICY_ID",
-    "ClaimNb":    "CLAIM_COUNT",
-    "Exposure":   "EXPOSURE",
-    "Area":       "TERRITORY_CODE",
-    "VehPower":   "CONSTRUCTION_QUALITY",
-    "VehAge":     "PROPERTY_AGE",
-    "DrivAge":    "POLICYHOLDER_AGE",
+    "IDpol": "POLICY_ID",
+    "ClaimNb": "CLAIM_COUNT",
+    "Exposure": "EXPOSURE",
+    "Area": "TERRITORY_CODE",
+    "VehPower": "CONSTRUCTION_QUALITY",
+    "VehAge": "PROPERTY_AGE",
+    "DrivAge": "POLICYHOLDER_AGE",
     "BonusMalus": "LOSS_HISTORY_SCORE",
-    "VehBrand":   "CONSTRUCTION_TYPE",
-    "VehGas":     "OCCUPANCY_TYPE",
-    "Density":    "POPULATION_DENSITY",
-    "Region":     "REGION_CODE",
+    "VehBrand": "CONSTRUCTION_TYPE",
+    "VehGas": "OCCUPANCY_TYPE",
+    "Density": "POPULATION_DENSITY",
+    "Region": "REGION_CODE",
 }
 
 SEV_RENAME = {
-    "IDpol":       "POLICY_ID",
+    "IDpol": "POLICY_ID",
     "ClaimAmount": "CLAIM_AMOUNT",
 }
 
 # ISO construction class lookup (maps freMTPL2 VehBrand codes → homeowners classes)
 CONSTRUCTION_TYPE_MAP = {
-    "B1":  "Frame",
-    "B2":  "Masonry",
-    "B3":  "Superior Masonry",
-    "B4":  "Non-Combustible",
-    "B5":  "Masonry Non-Combustible",
-    "B6":  "Modified Fire Resistive",
+    "B1": "Frame",
+    "B2": "Masonry",
+    "B3": "Superior Masonry",
+    "B4": "Non-Combustible",
+    "B5": "Masonry Non-Combustible",
+    "B6": "Modified Fire Resistive",
     "B10": "Fire Resistive",
     "B11": "Log",
     "B12": "Superior Frame",
@@ -88,7 +88,7 @@ CONSTRUCTION_TYPE_MAP = {
 
 OCCUPANCY_TYPE_MAP = {
     "Regular": "Owner-Occupied",
-    "Diesel":  "Tenant-Occupied",
+    "Diesel": "Tenant-Occupied",
 }
 
 
@@ -172,25 +172,29 @@ def transform_freq(df: pd.DataFrame) -> pd.DataFrame:
 
     # Value remaps — strip ARFF-injected single quotes then map
     # (VehGas arrives as object dtype with values like "'Regular'"; VehBrand as categorical, already clean)
-    df["OCCUPANCY_TYPE"] = df["OCCUPANCY_TYPE"].astype(str).str.strip("'").map(OCCUPANCY_TYPE_MAP)
-    df["CONSTRUCTION_TYPE"] = df["CONSTRUCTION_TYPE"].astype(str).str.strip("'").map(CONSTRUCTION_TYPE_MAP)
+    df["OCCUPANCY_TYPE"] = (
+        df["OCCUPANCY_TYPE"].astype(str).str.strip("'").map(OCCUPANCY_TYPE_MAP)
+    )
+    df["CONSTRUCTION_TYPE"] = (
+        df["CONSTRUCTION_TYPE"].astype(str).str.strip("'").map(CONSTRUCTION_TYPE_MAP)
+    )
 
     # Ensure numeric types are correct
-    df["POLICY_ID"]            = df["POLICY_ID"].astype("int64")
-    df["CLAIM_COUNT"]          = df["CLAIM_COUNT"].astype("int64")
-    df["EXPOSURE"]             = df["EXPOSURE"].astype("float64")
+    df["POLICY_ID"] = df["POLICY_ID"].astype("int64")
+    df["CLAIM_COUNT"] = df["CLAIM_COUNT"].astype("int64")
+    df["EXPOSURE"] = df["EXPOSURE"].astype("float64")
     df["CONSTRUCTION_QUALITY"] = df["CONSTRUCTION_QUALITY"].astype("int64")
-    df["PROPERTY_AGE"]         = df["PROPERTY_AGE"].astype("int64")
-    df["POLICYHOLDER_AGE"]     = df["POLICYHOLDER_AGE"].astype("int64")
-    df["LOSS_HISTORY_SCORE"]   = df["LOSS_HISTORY_SCORE"].astype("float64")
-    df["POPULATION_DENSITY"]   = df["POPULATION_DENSITY"].astype("float64")
+    df["PROPERTY_AGE"] = df["PROPERTY_AGE"].astype("int64")
+    df["POLICYHOLDER_AGE"] = df["POLICYHOLDER_AGE"].astype("int64")
+    df["LOSS_HISTORY_SCORE"] = df["LOSS_HISTORY_SCORE"].astype("float64")
+    df["POPULATION_DENSITY"] = df["POPULATION_DENSITY"].astype("float64")
 
     return df
 
 
 def transform_sev(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns=SEV_RENAME)
-    df["POLICY_ID"]    = df["POLICY_ID"].astype("int64")
+    df["POLICY_ID"] = df["POLICY_ID"].astype("int64")
     df["CLAIM_AMOUNT"] = df["CLAIM_AMOUNT"].astype("float64")
     return df
 
@@ -227,19 +231,27 @@ def generate_xml_sample(freq_df: pd.DataFrame, n: int = 1000) -> str:
     root = ET.Element("PolicyFeed")
     for _, row in sample.iterrows():
         policy = ET.SubElement(root, "Policy")
-        ET.SubElement(policy, "PolicyId").text       = str(int(row["POLICY_ID"]))
-        ET.SubElement(policy, "Exposure").text        = str(round(float(row["EXPOSURE"]), 6))
-        ET.SubElement(policy, "PolicyholderAge").text = str(int(row["POLICYHOLDER_AGE"]))
-        ET.SubElement(policy, "LossHistoryScore").text = str(round(float(row["LOSS_HISTORY_SCORE"]), 4))
-        ET.SubElement(policy, "PopulationDensity").text = str(round(float(row["POPULATION_DENSITY"]), 4))
-        ET.SubElement(policy, "RegionCode").text      = str(row["REGION_CODE"])
+        ET.SubElement(policy, "PolicyId").text = str(int(row["POLICY_ID"]))
+        ET.SubElement(policy, "Exposure").text = str(round(float(row["EXPOSURE"]), 6))
+        ET.SubElement(policy, "PolicyholderAge").text = str(
+            int(row["POLICYHOLDER_AGE"])
+        )
+        ET.SubElement(policy, "LossHistoryScore").text = str(
+            round(float(row["LOSS_HISTORY_SCORE"]), 4)
+        )
+        ET.SubElement(policy, "PopulationDensity").text = str(
+            round(float(row["POPULATION_DENSITY"]), 4)
+        )
+        ET.SubElement(policy, "RegionCode").text = str(row["REGION_CODE"])
 
         risk = ET.SubElement(policy, "Risk")
-        ET.SubElement(risk, "TerritoryCode").text      = str(row["TERRITORY_CODE"])
-        ET.SubElement(risk, "ConstructionType").text   = str(row["CONSTRUCTION_TYPE"])
-        ET.SubElement(risk, "ConstructionQuality").text = str(int(row["CONSTRUCTION_QUALITY"]))
-        ET.SubElement(risk, "PropertyAge").text        = str(int(row["PROPERTY_AGE"]))
-        ET.SubElement(risk, "OccupancyType").text      = str(row["OCCUPANCY_TYPE"])
+        ET.SubElement(risk, "TerritoryCode").text = str(row["TERRITORY_CODE"])
+        ET.SubElement(risk, "ConstructionType").text = str(row["CONSTRUCTION_TYPE"])
+        ET.SubElement(risk, "ConstructionQuality").text = str(
+            int(row["CONSTRUCTION_QUALITY"])
+        )
+        ET.SubElement(risk, "PropertyAge").text = str(int(row["PROPERTY_AGE"]))
+        ET.SubElement(risk, "OccupancyType").text = str(row["OCCUPANCY_TYPE"])
 
         claims = ET.SubElement(policy, "Claims")
         ET.SubElement(claims, "ClaimCount").text = str(int(row["CLAIM_COUNT"]))
@@ -255,16 +267,16 @@ def load_xml_to_snowflake(freq_df: pd.DataFrame, args: argparse.Namespace) -> No
     Demonstrates the Ratabase/PolicyPro XML ingestion pattern:
         PUT → COPY INTO RAW_POLICY_XML → XMLGET() → HOME_POLICY_FREQ_XML
     """
-    db     = args.database
+    db = args.database
     schema = args.schema
-    stage  = f"{db}.{schema}.OUTPUT_STAGE"
-    ff     = f"{db}.{schema}.XML_FF"
+    stage = f"{db}.{schema}.OUTPUT_STAGE"
+    ff = f"{db}.{schema}.XML_FF"
 
     print(f"\nGenerating XML sample ({args.xml_sample_size} policies)...")
     xml_str = generate_xml_sample(freq_df, args.xml_sample_size)
 
     conn = build_connection(args)
-    cur  = conn.cursor()
+    cur = conn.cursor()
 
     try:
         # Ensure OUTPUT_STAGE exists
@@ -324,15 +336,18 @@ def load_xml_to_snowflake(freq_df: pd.DataFrame, args: argparse.Namespace) -> No
                 XMLGET(XMLGET(SRC, 'Claims'), 'ClaimCount'):$::INTEGER       AS CLAIM_COUNT
             FROM {db}.{schema}.RAW_POLICY_XML
         """)
-        print(f"  HOME_POLICY_FREQ_XML created — same schema as HOME_POLICY_FREQ, sourced from XML.")
+        print(
+            f"  HOME_POLICY_FREQ_XML created — same schema as HOME_POLICY_FREQ, sourced from XML."
+        )
 
     finally:
         cur.close()
         conn.close()
 
 
-
-def build_connection(args: argparse.Namespace) -> snowflake.connector.SnowflakeConnection:
+def build_connection(
+    args: argparse.Namespace,
+) -> snowflake.connector.SnowflakeConnection:
     """Build a Snowflake connection from parsed args.
 
     If --connection is provided, use a named connection from connections.toml
@@ -404,7 +419,7 @@ if __name__ == "__main__":
 
     freq_df, sev_df = download_datasets()
     freq_df = transform_freq(freq_df)
-    sev_df  = transform_sev(sev_df)
+    sev_df = transform_sev(sev_df)
 
     print("\nFreq column sample:")
     print(freq_df.dtypes)

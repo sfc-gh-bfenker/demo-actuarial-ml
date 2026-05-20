@@ -25,6 +25,7 @@ dependencies = [
 [dependency-groups]
 # install with: uv sync --group dev
 dev = [
+    "black>=26.5.1",
     "ipykernel>=6.29",   # run notebook in VS Code / Jupyter Lab
 ]
 

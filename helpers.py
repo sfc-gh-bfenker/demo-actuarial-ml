@@ -4,30 +4,47 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_tweedie_deviance
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    mean_tweedie_deviance,
+)
 
 
-def plot_obs_pred(df, feature, weight, observed, predicted,
-                  y_label=None, title=None, ax=None, fill_legend=False):
+def plot_obs_pred(
+    df,
+    feature,
+    weight,
+    observed,
+    predicted,
+    y_label=None,
+    title=None,
+    ax=None,
+    fill_legend=False,
+):
     """Observed vs. predicted, aggregated by a rating factor.
     Exposure distribution is shown on a secondary y-axis so the two
     quantities are not conflated on the same scale."""
     df_ = df[[feature, weight]].copy()
-    df_["observed"]  = df[observed]  * df[weight]
-    df_["predicted"] = predicted     * df[weight]
+    df_["observed"] = df[observed] * df[weight]
+    df_["predicted"] = predicted * df[weight]
     df_ = (
         df_.groupby(feature)[[weight, "observed", "predicted"]]
         .sum()
-        .assign(observed  = lambda x: x["observed"]  / x[weight])
-        .assign(predicted = lambda x: x["predicted"] / x[weight])
+        .assign(observed=lambda x: x["observed"] / x[weight])
+        .assign(predicted=lambda x: x["predicted"] / x[weight])
     )
     ax = df_[["observed", "predicted"]].plot(style=".", ax=ax)
     ax.set(ylabel=y_label, title=title or "Observed vs. Predicted")
 
     ax2 = ax.twinx()
     ax2.fill_between(
-        df_.index, 0, df_[weight],
-        color="green", alpha=0.08, label=f"{feature} exposure",
+        df_.index,
+        0,
+        df_[weight],
+        color="green",
+        alpha=0.08,
+        label=f"{feature} exposure",
     )
     ax2.set_ylabel("Exposure (policy-years)", color="green", fontsize=8)
     ax2.tick_params(axis="y", labelcolor="green", labelsize=7)
@@ -43,12 +60,13 @@ def plot_obs_pred(df, feature, weight, observed, predicted,
     return ax
 
 
-def score_estimator(estimator, X_train, X_test, df_train, df_test,
-                    target, weights, tweedie_powers=None):
+def score_estimator(
+    estimator, X_train, X_test, df_train, df_test, target, weights, tweedie_powers=None
+):
     """Evaluate an estimator on train/test with common actuarial metrics."""
     metrics = [
-        ("D² explained",       None),
-        ("mean abs. error",    mean_absolute_error),
+        ("D² explained", None),
+        ("mean abs. error", mean_absolute_error),
         ("mean squared error", mean_squared_error),
     ]
     if tweedie_powers:
@@ -75,24 +93,24 @@ def score_estimator(estimator, X_train, X_test, df_train, df_test,
         pd.DataFrame(res)
         .set_index(["metric", "subset"])
         .score.unstack(-1)
-        .round(4)
-        [["train", "test"]]
+        .round(4)[["train", "test"]]
     )
 
 
 def lorenz_curve(y_true, y_pred, exposure):
     """Lorenz curve: cumulative exposure vs. cumulative claims ranked by model."""
     y_true, y_pred, exposure = map(np.asarray, [y_true, y_pred, exposure])
-    rank         = np.argsort(y_pred)
-    cum_claims   = np.cumsum(y_true[rank] * exposure[rank])
-    cum_claims  /= cum_claims[-1]
+    rank = np.argsort(y_pred)
+    cum_claims = np.cumsum(y_true[rank] * exposure[rank])
+    cum_claims /= cum_claims[-1]
     cum_exposure = np.cumsum(exposure[rank])
     cum_exposure /= cum_exposure[-1]
     return cum_exposure, cum_claims
 
 
-def double_lift_chart(df_test, predictions_dict,
-                      weight="EXPOSURE", y_true="PurePremium", n_bins=10):
+def double_lift_chart(
+    df_test, predictions_dict, weight="EXPOSURE", y_true="PurePremium", n_bins=10
+):
     """
     Double-lift chart: rank test policies by predicted pure premium into deciles,
     then compare exposure-weighted predicted vs. observed per decile.
@@ -109,20 +127,33 @@ def double_lift_chart(df_test, predictions_dict,
     for ax, (label, y_pred) in zip(axes, predictions_dict.items()):
         tmp = df_test[[weight, y_true]].copy()
         tmp["predicted"] = np.asarray(y_pred)
-        tmp["decile"]    = (
+        tmp["decile"] = (
             pd.qcut(tmp["predicted"], q=n_bins, labels=False, duplicates="drop") + 1
         )
         agg = tmp.groupby("decile").apply(
-            lambda g: pd.Series({
-                "Predicted": np.average(g["predicted"], weights=g[weight]),
-                "Observed":  np.average(g[y_true],     weights=g[weight]),
-            })
+            lambda g: pd.Series(
+                {
+                    "Predicted": np.average(g["predicted"], weights=g[weight]),
+                    "Observed": np.average(g[y_true], weights=g[weight]),
+                }
+            )
         )
         x = agg.index.astype(int)
-        ax.plot(x, agg["Predicted"], marker="o", color="steelblue",
-                label="Predicted pure premium")
-        ax.plot(x, agg["Observed"],  marker="s", color="darkorange",
-                linestyle="--", label="Observed pure premium")
+        ax.plot(
+            x,
+            agg["Predicted"],
+            marker="o",
+            color="steelblue",
+            label="Predicted pure premium",
+        )
+        ax.plot(
+            x,
+            agg["Observed"],
+            marker="s",
+            color="darkorange",
+            linestyle="--",
+            label="Observed pure premium",
+        )
         ax.set_xlabel("Risk Decile  (1 = safest → 10 = riskiest)")
         ax.set_ylabel("Exposure-Weighted Pure Premium ($)")
         ax.set_title(f"Double-Lift Chart — {label}")
