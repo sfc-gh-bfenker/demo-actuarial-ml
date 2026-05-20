@@ -1,104 +1,48 @@
-from functools import partial
+"""
+Actuarial diagnostic plotting and scoring utilities.
 
-import numpy as np
-import pandas as pd
+Adapted from the scikit-learn French motor insurance tutorial:
+https://scikit-learn.org/stable/auto_examples/linear_model/plot_tweedie_regression_insurance_claims.html
+
+These helpers operate on plain pandas DataFrames and are designed to work
+directly with data pulled from Snowflake Feature Store datasets via
+``dataset.read.to_pandas()``.  They are presentation-layer utilities only —
+no Snowflake dependencies are introduced here.
+
+Key outputs used in regulatory filings:
+- ``double_lift_chart``: primary actuarial model-validation exhibit
+- ``lorenz_curve`` / Gini index: risk-discrimination summary for pricing reviews
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-from sklearn.metrics import (
-    mean_absolute_error,
-    mean_squared_error,
-    mean_tweedie_deviance,
-)
-
-
-def plot_obs_pred(
-    df,
-    feature,
-    weight,
-    observed,
-    predicted,
-    y_label=None,
-    title=None,
-    ax=None,
-    fill_legend=False,
-):
-    """Observed vs. predicted, aggregated by a rating factor.
-    Exposure distribution is shown on a secondary y-axis so the two
-    quantities are not conflated on the same scale."""
-    df_ = df[[feature, weight]].copy()
-    df_["observed"] = df[observed] * df[weight]
-    df_["predicted"] = predicted * df[weight]
-    df_ = (
-        df_.groupby(feature)[[weight, "observed", "predicted"]]
-        .sum()
-        .assign(observed=lambda x: x["observed"] / x[weight])
-        .assign(predicted=lambda x: x["predicted"] / x[weight])
-    )
-    ax = df_[["observed", "predicted"]].plot(style=".", ax=ax)
-    ax.set(ylabel=y_label, title=title or "Observed vs. Predicted")
-
-    ax2 = ax.twinx()
-    ax2.fill_between(
-        df_.index,
-        0,
-        df_[weight],
-        color="green",
-        alpha=0.08,
-        label=f"{feature} exposure",
-    )
-    ax2.set_ylabel("Exposure (policy-years)", color="green", fontsize=8)
-    ax2.tick_params(axis="y", labelcolor="green", labelsize=7)
-    ax2.set_ylim(bottom=0)
-
-    ax.set_zorder(ax2.get_zorder() + 1)
-    ax.patch.set_visible(False)
-
-    if fill_legend:
-        handles, labels = ax.get_legend_handles_labels()
-        ax.legend(handles, labels, loc="upper left")
-
-    return ax
-
-
-def score_estimator(
-    estimator, X_train, X_test, df_train, df_test, target, weights, tweedie_powers=None
-):
-    """Evaluate an estimator on train/test with common actuarial metrics."""
-    metrics = [
-        ("D² explained", None),
-        ("mean abs. error", mean_absolute_error),
-        ("mean squared error", mean_squared_error),
-    ]
-    if tweedie_powers:
-        metrics += [
-            (f"mean Tweedie dev p={p:.4f}", partial(mean_tweedie_deviance, power=p))
-            for p in tweedie_powers
-        ]
-    res = []
-    for label, X, df in [("train", X_train, df_train), ("test", X_test, df_test)]:
-        y, w = df[target], df[weights]
-        for score_label, metric in metrics:
-            if isinstance(estimator, tuple) and len(estimator) == 2:
-                y_pred = estimator[0].predict(X) * estimator[1].predict(X)
-            else:
-                y_pred = estimator.predict(X)
-            if metric is None:
-                if not hasattr(estimator, "score"):
-                    continue
-                score = estimator.score(X, y, sample_weight=w)
-            else:
-                score = metric(y, y_pred, sample_weight=w)
-            res.append({"subset": label, "metric": score_label, "score": score})
-    return (
-        pd.DataFrame(res)
-        .set_index(["metric", "subset"])
-        .score.unstack(-1)
-        .round(4)[["train", "test"]]
-    )
+import numpy as np
+import pandas as pd
 
 
 def lorenz_curve(y_true, y_pred, exposure):
-    """Lorenz curve: cumulative exposure vs. cumulative claims ranked by model."""
+    """Compute the Lorenz curve for a pricing model's risk-discrimination ability.
+
+    Policies are ranked from safest (lowest predicted risk) to riskiest, then
+    cumulative exposure and cumulative claim amounts are computed along that
+    ranking.  A perfect model would rank all high-loss policies last; a random
+    model produces the diagonal (no discrimination).
+
+    The **Gini index** = 1 − 2 × AUC(lorenz_curve), where AUC is computed via
+    ``sklearn.metrics.auc``.  Higher Gini indicates better risk separation.
+    Gini curves are a standard exhibit in actuarial pricing reviews and
+    regulatory model-filing documentation.
+
+    Args:
+        y_true:   Array-like of observed pure premiums (or claim amounts).
+        y_pred:   Array-like of model-predicted pure premiums used for ranking.
+        exposure: Array-like of exposure weights (policy-years).
+
+    Returns:
+        Tuple ``(cum_exposure, cum_claims)``, both normalised to ``[0, 1]``,
+        suitable for passing directly to ``matplotlib.pyplot.plot`` and
+        ``sklearn.metrics.auc``.
+    """
     y_true, y_pred, exposure = map(np.asarray, [y_true, y_pred, exposure])
     rank = np.argsort(y_pred)
     cum_claims = np.cumsum(y_true[rank] * exposure[rank])
@@ -111,13 +55,39 @@ def lorenz_curve(y_true, y_pred, exposure):
 def double_lift_chart(
     df_test, predictions_dict, weight="EXPOSURE", y_true="PurePremium", n_bins=10
 ):
-    """
-    Double-lift chart: rank test policies by predicted pure premium into deciles,
-    then compare exposure-weighted predicted vs. observed per decile.
+    """Produce a double-lift chart — the standard actuarial model-validation exhibit.
 
-    A well-calibrated model should show:
-      - Monotone increase in both lines (predicted and observed)
-      - Predicted and observed lines tracking closely together
+    Each model in ``predictions_dict`` receives its own subplot.  Test policies
+    are ranked into ``n_bins`` deciles by predicted pure premium (1 = safest,
+    ``n_bins`` = riskiest).  Within each decile, exposure-weighted *predicted*
+    and *observed* pure premiums are plotted side-by-side.
+
+    **What to look for:**
+
+    - Both lines should rise monotonically left → right (good risk ordering).
+    - Predicted and observed lines should track closely (good calibration).
+    - Large gaps in specific deciles reveal where the model misfits.
+
+    This chart is a required exhibit in most U.S. state rate-filing packages
+    and is used by internal pricing committees to validate model relativities
+    before deployment.
+
+    Args:
+        df_test:          Test-set DataFrame.  Must contain ``weight`` and
+                          ``y_true`` columns.
+        predictions_dict: ``{label: predictions_array}`` mapping.  One subplot
+                          is generated per entry.
+        weight:           Column name of the exposure weight.
+                          Defaults to ``"EXPOSURE"``.
+        y_true:           Column name of the observed pure premium.
+                          Defaults to ``"PurePremium"`` (add an alias column
+                          if your DataFrame uses a different name).
+        n_bins:           Number of risk deciles.  Defaults to ``10``.
+
+    Returns:
+        ``matplotlib.figure.Figure`` containing all subplots.  Call
+        ``fig.savefig(path)`` to persist; pass to
+        ``tracker.log_artifact(path)`` to attach to a Snowflake experiment run.
     """
     n = len(predictions_dict)
     fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), sharey=False)
