@@ -1,5 +1,5 @@
 [project]
-name = "country-bank-demo"
+name = "actuarial-pricing-demo"
 version = "0.1.0"
 description = "Homeowners insurance actuarial pricing demo — GLM/GBM with Snowflake"
 requires-python = ">=3.11"

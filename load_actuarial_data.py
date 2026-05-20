@@ -74,6 +74,15 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import snowflake.connector
 from snowflake.connector.pandas_tools import write_pandas
+from config import (
+    DATABASE as DEFAULT_DATABASE,
+    SCHEMA as DEFAULT_SCHEMA,
+    ROLE as DEFAULT_ROLE,
+    WAREHOUSE as DEFAULT_WAREHOUSE,
+    DEFAULT_ACCOUNT,
+    DEFAULT_USER,
+    DEFAULT_PRIVATE_KEY_FILE,
+)
 
 # ── SSL patch (corporate certificate environment) ─────────────────────────────
 # Some corporate networks intercept HTTPS with a custom CA.  Disabling
@@ -84,14 +93,8 @@ ssl._create_default_https_context = ssl._create_unverified_context
 from sklearn.datasets import fetch_openml  # noqa: E402 (import after ssl patch)
 
 # ── Connection defaults ───────────────────────────────────────────────────────
-# Override any of these via the corresponding CLI flag or environment variable.
-DEFAULT_ACCOUNT = "SFSENORTHAMERICA-BFENKER_AWS1"
-DEFAULT_USER = "BFENKER"
-DEFAULT_ROLE = "COUNTRY_BANK_DEMO_ROLE"
-DEFAULT_WAREHOUSE = "COMPUTE_WH"
-DEFAULT_DATABASE = "COUNTRY_BANK_DEMO_DB"
-DEFAULT_SCHEMA = "ACTUARIAL_PRICING"
-DEFAULT_PRIVATE_KEY_FILE = "/Users/bfenker/.snowflake/rsa_key.p8"
+# Imported from config.py — edit that file to change environment defaults.
+# Override any value via the corresponding CLI flag or environment variable.
 
 # ── freMTPL2 → homeowners column rename maps ──────────────────────────────────
 # The source dataset uses French motor insurance terminology.  Columns are

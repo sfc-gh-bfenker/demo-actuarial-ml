@@ -67,9 +67,13 @@ _SPINE_COLS = {"POLICY_ID", "PURE_PREMIUM", "EXPOSURE"}
 # runs for this model are visible together in the Snowsight Experiments UI.
 EXPERIMENT = "ACTUARIAL_GBM_TRAINING"
 
-DATABASE = "COUNTRY_BANK_DEMO_DB"
+# NOTE: train.py runs as a standalone file inside a Snowflake ML Job container
+# and cannot import from config.py.  Update these constants directly when
+# changing environments.  See config.py for the local-script equivalents.
+DATABASE = "COUNTRY_ML"
 SCHEMA = "ACTUARIAL_PRICING"
-ROLE = "COUNTRY_BANK_DEMO_ROLE"
+ROLE = "CUSTOMER_ROLE"
+WAREHOUSE = "COMPUTE_WH"
 
 
 def lorenz_curve(y_true, y_pred, exposure):
@@ -210,7 +214,7 @@ def _get_session() -> Session:
             {
                 "connection_name": "default",
                 "role": ROLE,
-                "warehouse": "COMPUTE_WH",
+                "warehouse": WAREHOUSE,
                 "database": DATABASE,
                 "schema": SCHEMA,
             }
