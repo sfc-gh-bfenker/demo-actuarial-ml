@@ -1,2 +1,43 @@
 deprecated/
-data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment / secrets
+.env
+.env.*
+*.p8
+*.pem
+
+# Data / model artifacts
+*.pkl
+*.joblib
+*.parquet
+*.csv
+*.xml
+scikit_learn_data/
+
+# OS
+Thumbs.db
