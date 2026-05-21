@@ -380,30 +380,7 @@ def train(
         # per-epoch training loss.
         tracker.log_metrics({"val_rmse": val_rmse, "val_mae": val_mae})
 
-        # ── 6. Log model ──────────────────────────────────────────────────────
-        # ``tracker.log_model`` does two things in one call:
-        #   (a) registers the fitted model as a versioned entry in the Snowflake
-        #       Model Registry (visible under AI & ML → Models in Snowsight), and
-        #   (b) links that model version back to this experiment run so the run
-        #       record shows which model it produced.
-        # ``enable_explainability=True`` pre-computes SHAP infrastructure so
-        # ``mv.run(df, function_name="explain")`` works without re-training.
-        # ``target_platforms`` controls where the model can be served:
-        #   WAREHOUSE  → mv.run() for batch scoring on a virtual warehouse
-        #   SNOWPARK_CONTAINER_SERVICES → mv.run_batch() on a compute pool
-        # Docs: https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview
-        mv = tracker.log_model(
-            model=gbm,
-            model_name="ACTUARIAL_GBM",
-            version_name=model_version,
-            comment="XGBoost GBM for homeowners pure premium pricing.",
-            metrics={"val_rmse": val_rmse, "val_mae": val_mae},
-            options={"enable_explainability": True},
-            target_platforms=["WAREHOUSE", "SNOWPARK_CONTAINER_SERVICES"],
-            sample_input_data=train_sdf.select(feature_cols).limit(10),
-        )  # type: ignore
-
-        # ── 7. Generate and upload diagnostic plots ───────────────────────────
+            # ── 7. Generate and upload diagnostic plots ───────────────────────────
         # Plots are saved to /tmp (available in both local and SPCS container
         # environments) then uploaded via ``log_artifact``.  Artifacts are
         # stored in the experiment's internal Snowflake stage and appear in the
@@ -433,10 +410,41 @@ def train(
         ax.legend()
         fig_gini.savefig("/tmp/gini_lorenz.png", dpi=150, bbox_inches="tight")
         plt.close(fig_gini)
+        
+        # ── 6. Log model ──────────────────────────────────────────────────────
+        # ``tracker.log_model`` does two things in one call:
+        #   (a) registers the fitted model as a versioned entry in the Snowflake
+        #       Model Registry (visible under AI & ML → Models in Snowsight), and
+        #   (b) links that model version back to this experiment run so the run
+        #       record shows which model it produced.
+        # ``enable_explainability=True`` pre-computes SHAP infrastructure so
+        # ``mv.run(df, function_name="explain")`` works without re-training.
+        # ``target_platforms`` controls where the model can be served:
+        #   WAREHOUSE  → mv.run() for batch scoring on a virtual warehouse
+        #   SNOWPARK_CONTAINER_SERVICES → mv.run_batch() on a compute pool
+        # Docs: https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview
+        mv = tracker.log_model(
+            model=gbm,
+            model_name="ACTUARIAL_GBM",
+            version_name=model_version,
+            comment="XGBoost GBM for homeowners pure premium pricing.",
+            metrics={"val_rmse": val_rmse, "val_mae": val_mae},
+            options={"enable_explainability": True},
+            target_platforms=["WAREHOUSE", "SNOWPARK_CONTAINER_SERVICES"],
+            sample_input_data=train_sdf.select(feature_cols).limit(10),
+            user_files={
+                "artifacts": [
+                    "/tmp/double_lift.png",
+                    "/tmp/gini_lorenz.png",
+                ]
+            },
+        )  # type: ignore
+
+
 
         tracker.log_artifact("/tmp/double_lift.png")
         tracker.log_artifact("/tmp/gini_lorenz.png")
-
+        
         # Generate SHAP-based explanations using the Model Registry's built-in
         # explainability function (enabled above via enable_explainability=True).
         # The returned Snowpark DataFrame contains per-feature SHAP values for
