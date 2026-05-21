@@ -11,9 +11,9 @@
 -- via SnowSQL / the Snowflake CLI.
 -- =============================================================================
 
-USE DATABASE COUNTRY_BANK_DEMO_DB;
+USE DATABASE COUNTRY_ML;
 USE SCHEMA   ACTUARIAL_PRICING;
-USE ROLE     COUNTRY_BANK_DEMO_ROLE;
+USE ROLE     ACCOUNTADMIN;
 USE WAREHOUSE COMPUTE_WH;
 
 -- =============================================================================
@@ -40,13 +40,13 @@ CREATE OR REPLACE TABLE RAW_CLAIM_XML  (SRC VARIANT);
 -- =============================================================================
 
 COPY INTO RAW_POLICY_XML
-FROM @OUTPUT_STAGE/inbound/
+FROM @DATA_STAGE/
 PATTERN      = '.*policy_freq.*'
 FILE_FORMAT  = (FORMAT_NAME = XML_FF)
 PURGE        = FALSE;
 
 COPY INTO RAW_CLAIM_XML
-FROM @OUTPUT_STAGE/inbound/
+FROM @DATA_STAGE/
 PATTERN      = '.*policy_sev.*'
 FILE_FORMAT  = (FORMAT_NAME = XML_FF)
 PURGE        = FALSE;

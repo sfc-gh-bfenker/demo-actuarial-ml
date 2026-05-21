@@ -70,9 +70,9 @@ EXPERIMENT = "ACTUARIAL_GBM_TRAINING"
 # NOTE: train.py runs as a standalone file inside a Snowflake ML Job container
 # and cannot import from config.py.  Update these constants directly when
 # changing environments.  See config.py for the local-script equivalents.
-DATABASE = "COUNTRY_BANK_DEMO_DB"
+DATABASE = "COUNTRY_ML"
 SCHEMA = "ACTUARIAL_PRICING"
-ROLE = "COUNTRY_BANK_DEMO_ROLE"
+ROLE = "ACCOUNTADMIN"
 WAREHOUSE = "COMPUTE_WH"
 
 
@@ -400,6 +400,7 @@ def train(
             metrics={"val_rmse": val_rmse, "val_mae": val_mae},
             options={"enable_explainability": True},
             target_platforms=["WAREHOUSE", "SNOWPARK_CONTAINER_SERVICES"],
+            sample_input_data=train_sdf.select(feature_cols).limit(10),
         )  # type: ignore
 
         # ── 7. Generate and upload diagnostic plots ───────────────────────────

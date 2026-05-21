@@ -14,11 +14,11 @@ Docs:
 """
 
 # ── Snowflake environment ─────────────────────────────────────────────────────
-DATABASE = "COUNTRY_BANK_DEMO_DB"  # Target database
+DATABASE = "COUNTRY_ML"  # Target database
 SCHEMA = "ACTUARIAL_PRICING"  # Target schema
-ROLE = "COUNTRY_BANK_DEMO_ROLE"  # Role used for all operations
+ROLE = "ACCOUNTADMIN"  # Role used for all operations
 WAREHOUSE = "COMPUTE_WH"  # Virtual warehouse for SQL compute
-COMPUTE_POOL = "DEMO_POOL"  # Compute pool for ML Jobs and batch inference
+COMPUTE_POOL = "CPU_POOL"  # Compute pool for ML Jobs and batch inference
 
 # ── load_actuarial_data.py only ───────────────────────────────────────────────
 # These default to empty strings.  Override via CLI flags or environment
