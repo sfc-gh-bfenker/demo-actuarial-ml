@@ -6,6 +6,11 @@ third-party liability portfolio (~678 K policies) published on OpenML.  Column
 names and value domains are remapped here to match a homeowners insurance
 context so the demo is directly relatable to property/casualty actuaries.
 
+The entire dataset is serialised to XML and loaded into Snowflake via
+``COPY INTO``, mirroring how a carrier receives Ratabase / PolicyPro rating
+extracts in practice.  The final ``HOME_POLICY_FREQ`` and ``HOME_POLICY_SEV``
+tables are created by pure-SQL ``XMLGET`` parsing — no ``write_pandas`` step.
+
 Usage
 -----
 ::
@@ -23,27 +28,22 @@ Usage
       --database          SNOWFLAKE_DATABASE
       --schema            SNOWFLAKE_SCHEMA
       --private-key-file  SNOWFLAKE_PRIVATE_KEY_FILE
-      --xml-sample-size   number of policies to serialize as XML (default 1000)
-      --skip-xml          skip XML sample generation and loading
 
 Tables written
 --------------
+``<database>.<schema>.RAW_POLICY_XML``
+    ~678 K rows — raw VARIANT column; one row per ``<Policy>`` element.
+
+``<database>.<schema>.RAW_CLAIM_XML``
+    ~26 K rows — raw VARIANT column; one row per ``<Claim>`` element.
+
 ``<database>.<schema>.HOME_POLICY_FREQ``
-    ~678 K rows — policy-level frequency data (one row per policy).
+    ~678 K rows — policy-level frequency data parsed from ``RAW_POLICY_XML``
+    using ``XMLGET``.
 
 ``<database>.<schema>.HOME_POLICY_SEV``
-    ~26 K rows — claim-level severity data (one row per claim; multiple rows
-    per policy are possible).
-
-``<database>.<schema>.RAW_POLICY_XML``
-    ``xml_sample_size`` rows — raw VARIANT column; one row per ``<Policy>``
-    element loaded from the XML file via ``COPY INTO`` with
-    ``STRIP_OUTER_ELEMENT = TRUE``.
-
-``<database>.<schema>.HOME_POLICY_FREQ_XML``
-    ``xml_sample_size`` rows — parsed from ``RAW_POLICY_XML`` using
-    ``XMLGET``; same column schema as ``HOME_POLICY_FREQ``.  Demonstrates the
-    Ratabase / PolicyPro XML ingestion pattern end-to-end.
+    ~26 K rows — claim-level severity data parsed from ``RAW_CLAIM_XML``
+    using ``XMLGET``.
 
 Snowflake features used
 -----------------------
@@ -69,11 +69,9 @@ import argparse
 import os
 import ssl
 import tempfile
-import xml.etree.ElementTree as ET
 
 import pandas as pd
 import snowflake.connector
-from snowflake.connector.pandas_tools import write_pandas
 from config import (
     DATABASE as DEFAULT_DATABASE,
     SCHEMA as DEFAULT_SCHEMA,
@@ -190,19 +188,6 @@ def parse_args() -> argparse.Namespace:
         dest="private_key_file",
         help="Path to RSA private key file for JWT auth (env: SNOWFLAKE_PRIVATE_KEY_FILE).",
     )
-    parser.add_argument(
-        "--xml-sample-size",
-        type=int,
-        default=1000,
-        dest="xml_sample_size",
-        help="Number of policies to serialize as XML for the ingestion demo (default: 1000).",
-    )
-    parser.add_argument(
-        "--skip-xml",
-        action="store_true",
-        dest="skip_xml",
-        help="Skip XML sample generation and Snowflake loading.",
-    )
     return parser.parse_args()
 
 
@@ -267,7 +252,7 @@ def transform_freq(df: pd.DataFrame) -> pd.DataFrame:
         df: Raw frequency DataFrame from ``download_datasets()``.
 
     Returns:
-        Cleaned and renamed DataFrame ready for ``load_to_snowflake()``.
+        Cleaned and renamed DataFrame ready for XML serialisation.
     """
     df = df.rename(columns=FREQ_RENAME)
 
@@ -281,9 +266,8 @@ def transform_freq(df: pd.DataFrame) -> pd.DataFrame:
         df["CONSTRUCTION_TYPE"].astype(str).str.strip("'").map(CONSTRUCTION_TYPE_MAP)
     )
 
-    # Explicit dtype coercion ensures write_pandas infers Snowflake column
-    # types correctly (e.g. BIGINT vs FLOAT) instead of relying on pandas
-    # defaults which can vary across pandas versions.
+    # Explicit dtype coercion ensures XML serialisation produces correct
+    # Python types (int vs float).
     df["POLICY_ID"] = df["POLICY_ID"].astype("int64")
     df["CLAIM_COUNT"] = df["CLAIM_COUNT"].astype("int64")
     df["EXPOSURE"] = df["EXPOSURE"].astype("float64")
@@ -318,13 +302,12 @@ def transform_sev(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def generate_xml_sample(freq_df: pd.DataFrame, n: int = 1000) -> str:
-    """Serialize a random sample of HOME_POLICY_FREQ rows to a PolicyFeed XML string.
+def generate_freq_xml(freq_df: pd.DataFrame) -> str:
+    """Serialise the full frequency DataFrame to a ``<PolicyFeed>`` XML string.
 
-    The XML schema mimics a Ratabase / PolicyPro-style property rating extract,
+    The schema mimics a Ratabase / PolicyPro-style property rating extract,
     with nested ``<Risk>`` and ``<Claims>`` sub-elements to demonstrate
-    Snowflake's ability to parse nested XML structures using chained
-    ``XMLGET`` calls.
+    Snowflake's chained ``XMLGET`` parsing capability.
 
     Output structure::
 
@@ -350,175 +333,236 @@ def generate_xml_sample(freq_df: pd.DataFrame, n: int = 1000) -> str:
           ...
         </PolicyFeed>
 
-    The outer ``<PolicyFeed>`` root is stripped by the Snowflake XML file
-    format option ``STRIP_OUTER_ELEMENT = TRUE``, which causes each direct
-    child ``<Policy>`` element to be loaded as a separate VARIANT row in
-    ``RAW_POLICY_XML``.  This is the recommended pattern for loading
-    multi-record XML files into Snowflake.
-
-    Docs:
-        https://docs.snowflake.com/en/sql-reference/sql/create-file-format
-        (see ``STRIP_OUTER_ELEMENT`` parameter)
+    Uses ``itertuples()`` for ~15× better throughput than ``iterrows()``
+    at 678 K rows.  The ``<PolicyFeed>`` root is stripped by
+    ``STRIP_OUTER_ELEMENT = TRUE`` in the Snowflake file format so each
+    ``<Policy>`` child becomes a separate VARIANT row in ``RAW_POLICY_XML``.
 
     Args:
         freq_df: Transformed frequency DataFrame (output of ``transform_freq``).
-        n:       Number of policies to include.  ``random_state=42`` is used
-                 for reproducible samples across runs.
 
     Returns:
-        UTF-8 XML string (no XML declaration header; the file format handles
-        encoding at load time).
+        UTF-8 XML string without an XML declaration header.
     """
-    sample = freq_df.sample(min(n, len(freq_df)), random_state=42)
-
-    root = ET.Element("PolicyFeed")
-    for _, row in sample.iterrows():
-        policy = ET.SubElement(root, "Policy")
-        ET.SubElement(policy, "PolicyId").text = str(int(row["POLICY_ID"]))
-        ET.SubElement(policy, "Exposure").text = str(round(float(row["EXPOSURE"]), 6))
-        ET.SubElement(policy, "PolicyholderAge").text = str(
-            int(row["POLICYHOLDER_AGE"])
+    parts = ["<PolicyFeed>\n"]
+    for row in freq_df.itertuples(index=False):
+        parts.append(
+            f"  <Policy>\n"
+            f"    <PolicyId>{row.POLICY_ID}</PolicyId>\n"
+            f"    <Exposure>{round(row.EXPOSURE, 6)}</Exposure>\n"
+            f"    <PolicyholderAge>{row.POLICYHOLDER_AGE}</PolicyholderAge>\n"
+            f"    <LossHistoryScore>{round(row.LOSS_HISTORY_SCORE, 4)}</LossHistoryScore>\n"
+            f"    <PopulationDensity>{round(row.POPULATION_DENSITY, 4)}</PopulationDensity>\n"
+            f"    <RegionCode>{row.REGION_CODE}</RegionCode>\n"
+            f"    <Risk>\n"
+            f"      <TerritoryCode>{row.TERRITORY_CODE}</TerritoryCode>\n"
+            f"      <ConstructionType>{row.CONSTRUCTION_TYPE}</ConstructionType>\n"
+            f"      <ConstructionQuality>{row.CONSTRUCTION_QUALITY}</ConstructionQuality>\n"
+            f"      <PropertyAge>{row.PROPERTY_AGE}</PropertyAge>\n"
+            f"      <OccupancyType>{row.OCCUPANCY_TYPE}</OccupancyType>\n"
+            f"    </Risk>\n"
+            f"    <Claims>\n"
+            f"      <ClaimCount>{row.CLAIM_COUNT}</ClaimCount>\n"
+            f"    </Claims>\n"
+            f"  </Policy>\n"
         )
-        ET.SubElement(policy, "LossHistoryScore").text = str(
-            round(float(row["LOSS_HISTORY_SCORE"]), 4)
+    parts.append("</PolicyFeed>")
+    return "".join(parts)
+
+
+def generate_sev_xml(sev_df: pd.DataFrame) -> str:
+    """Serialise the full severity DataFrame to a ``<ClaimFeed>`` XML string.
+
+    Output structure::
+
+        <ClaimFeed>
+          <Claim>
+            <PolicyId>...</PolicyId>
+            <ClaimAmount>...</ClaimAmount>
+          </Claim>
+          ...
+        </ClaimFeed>
+
+    The ``<ClaimFeed>`` root is stripped by ``STRIP_OUTER_ELEMENT = TRUE``
+    so each ``<Claim>`` child becomes a separate VARIANT row in
+    ``RAW_CLAIM_XML``.
+
+    Args:
+        sev_df: Transformed severity DataFrame (output of ``transform_sev``).
+
+    Returns:
+        UTF-8 XML string without an XML declaration header.
+    """
+    parts = ["<ClaimFeed>\n"]
+    for row in sev_df.itertuples(index=False):
+        parts.append(
+            f"  <Claim>\n"
+            f"    <PolicyId>{row.POLICY_ID}</PolicyId>\n"
+            f"    <ClaimAmount>{round(row.CLAIM_AMOUNT, 2)}</ClaimAmount>\n"
+            f"  </Claim>\n"
         )
-        ET.SubElement(policy, "PopulationDensity").text = str(
-            round(float(row["POPULATION_DENSITY"]), 4)
-        )
-        ET.SubElement(policy, "RegionCode").text = str(row["REGION_CODE"])
-
-        risk = ET.SubElement(policy, "Risk")
-        ET.SubElement(risk, "TerritoryCode").text = str(row["TERRITORY_CODE"])
-        ET.SubElement(risk, "ConstructionType").text = str(row["CONSTRUCTION_TYPE"])
-        ET.SubElement(risk, "ConstructionQuality").text = str(
-            int(row["CONSTRUCTION_QUALITY"])
-        )
-        ET.SubElement(risk, "PropertyAge").text = str(int(row["PROPERTY_AGE"]))
-        ET.SubElement(risk, "OccupancyType").text = str(row["OCCUPANCY_TYPE"])
-
-        claims = ET.SubElement(policy, "Claims")
-        ET.SubElement(claims, "ClaimCount").text = str(int(row["CLAIM_COUNT"]))
-
-    ET.indent(root, space="  ")
-    return ET.tostring(root, encoding="unicode")
+    parts.append("</ClaimFeed>")
+    return "".join(parts)
 
 
-def load_xml_to_snowflake(freq_df: pd.DataFrame, args: argparse.Namespace) -> None:
-    """Generate a PolicyFeed XML sample and load it into Snowflake.
+def load_xml_to_snowflake(
+    freq_df: pd.DataFrame,
+    sev_df: pd.DataFrame,
+    args: argparse.Namespace,
+) -> None:
+    """Serialise both DataFrames to XML, upload to Snowflake, and create tables.
 
-    This function demonstrates the full XML ingestion pipeline that mirrors
-    how a carrier would receive a Ratabase or PolicyPro rating extract:
+    Full pipeline:
 
-    1. **Generate** — serialize a sample of ``HOME_POLICY_FREQ`` rows to a
-       well-structured ``<PolicyFeed>`` XML document.
-    2. **PUT** — upload the local XML file to ``OUTPUT_STAGE`` using the
-       Snowflake Python Connector's ``PUT`` command, which stages files for
-       bulk loading without requiring external storage access.
+    1. **Serialise** — both DataFrames are written to XML files in a local
+       temp directory.  The frequency file (~678 K policies) is ~150 MB
+       uncompressed; ``AUTO_COMPRESS=TRUE`` gzips it before upload.
+    2. **PUT** — both files are staged in ``OUTPUT_STAGE/inbound/`` using
+       the Snowflake ``PUT`` command.
        Docs: https://docs.snowflake.com/en/sql-reference/sql/put
-    3. **FILE FORMAT** — create an XML file format with
-       ``STRIP_OUTER_ELEMENT = TRUE``, which strips the ``<PolicyFeed>`` root
-       and loads each ``<Policy>`` child as a separate row.
+    3. **File format** — ``XML_FF`` with ``STRIP_OUTER_ELEMENT = TRUE``
+       strips the outer ``<PolicyFeed>`` / ``<ClaimFeed>`` root so each
+       child element becomes a separate VARIANT row.
        Docs: https://docs.snowflake.com/en/sql-reference/sql/create-file-format
-    4. **COPY INTO** — load the staged XML into ``RAW_POLICY_XML`` as a
-       ``VARIANT`` column.  The VARIANT type stores the XML element as a
-       native semi-structured value that Snowflake can query with path
-       expressions.
+    4. **COPY INTO** — raw VARIANT staging tables ``RAW_POLICY_XML`` and
+       ``RAW_CLAIM_XML`` are populated from the staged files.
        Docs: https://docs.snowflake.com/en/sql-reference/sql/copy-into-table
-    5. **XMLGET parse** — create ``HOME_POLICY_FREQ_XML`` by extracting each
-       field from the VARIANT using ``XMLGET``.  Key syntax notes:
-
-       - ``XMLGET(src, 'Tag'):$`` — the ``:$`` path extracts the text content
-         of the element.
-       - ``XMLGET(XMLGET(src, 'Risk'), 'TerritoryCode'):$`` — chained calls
-         navigate nested elements.
-       - Cast with ``::TYPE`` to produce typed columns.
+    5. **XMLGET parse** — pure-SQL ``CREATE TABLE … AS SELECT XMLGET(…)``
+       extracts every field from the VARIANT into typed columns, producing
+       ``HOME_POLICY_FREQ`` and ``HOME_POLICY_SEV`` with the same schema
+       the downstream feature engineering pipeline expects.
+       ``XMLGET(node, 'Tag'):"$"`` — the ``"$"`` path accessor (double-quoted)
+       extracts the text content.  Nested elements use chained calls.
        Docs: https://docs.snowflake.com/en/sql-reference/functions/xmlget
 
     Args:
-        freq_df: Transformed frequency DataFrame.
-        args:    Parsed CLI arguments (provides database, schema, xml_sample_size).
+        freq_df: Transformed frequency DataFrame (~678 K rows).
+        sev_df:  Transformed severity DataFrame (~26 K rows).
+        args:    Parsed CLI arguments (provides database, schema).
     """
     db = args.database
     schema = args.schema
-    stage = f"{db}.{schema}.OUTPUT_STAGE"
+    stage = f"{db}.{schema}.STAGING"
     ff = f"{db}.{schema}.XML_FF"
 
-    print(f"\nGenerating XML sample ({args.xml_sample_size} policies)...")
-    xml_str = generate_xml_sample(freq_df, args.xml_sample_size)
+    print(f"\nSerialising {len(freq_df):,} policies to XML...")
+    freq_xml = generate_freq_xml(freq_df)
+    print(f"  freq XML: {len(freq_xml) / 1_000_000:.1f} MB")
+
+    print(f"Serialising {len(sev_df):,} claims to XML...")
+    sev_xml = generate_sev_xml(sev_df)
+    print(f"  sev  XML: {len(sev_xml) / 1_000_000:.1f} MB")
 
     conn = build_connection(args)
     cur = conn.cursor()
 
     try:
-        # Ensure the output stage exists before attempting to PUT files.
         cur.execute(f"CREATE STAGE IF NOT EXISTS {stage}")
 
-        # Write the XML string to a temporary local file, then PUT it to the
-        # Snowflake stage.  AUTO_COMPRESS=FALSE keeps the file as plain XML so
-        # it is readable in the Snowsight Files view; Snowflake handles gzip
-        # transparently if AUTO_COMPRESS=TRUE were used instead.
+        # Write XML strings to temp files and PUT to stage.
+        # AUTO_COMPRESS=TRUE gzips the files before upload; Snowflake
+        # decompresses automatically during COPY INTO.
         with tempfile.NamedTemporaryFile(
-            suffix=".xml", mode="w", encoding="utf-8", delete=False
+            suffix="_policy_freq.xml", mode="w", encoding="utf-8", delete=False
         ) as f:
-            f.write(xml_str)
-            local_path = f.name
+            f.write(freq_xml)
+            freq_local = f.name
 
-        print(f"Uploading {local_path} → @{stage}/inbound/ ...")
+        with tempfile.NamedTemporaryFile(
+            suffix="_policy_sev.xml", mode="w", encoding="utf-8", delete=False
+        ) as f:
+            f.write(sev_xml)
+            sev_local = f.name
+
+        print(f"Uploading {freq_local} → @{stage}/inbound/ ...")
         cur.execute(
-            f"PUT file://{local_path} @{stage}/inbound/ "
-            f"AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
+            f"PUT file://{freq_local} @{stage}/inbound/ "
+            f"AUTO_COMPRESS=TRUE OVERWRITE=TRUE"
         )
-        os.unlink(local_path)
+        os.unlink(freq_local)
 
-        # STRIP_OUTER_ELEMENT = TRUE removes the <PolicyFeed> root so that
-        # each <Policy> child element becomes a separate row in the target table,
-        # rather than loading the entire document as a single VARIANT.
+        print(f"Uploading {sev_local} → @{stage}/inbound/ ...")
+        cur.execute(
+            f"PUT file://{sev_local} @{stage}/inbound/ "
+            f"AUTO_COMPRESS=TRUE OVERWRITE=TRUE"
+        )
+        os.unlink(sev_local)
+
+        # XML file format — STRIP_OUTER_ELEMENT strips <PolicyFeed> /
+        # <ClaimFeed> so each child element becomes a separate VARIANT row.
         cur.execute(f"""
             CREATE FILE FORMAT IF NOT EXISTS {ff}
                 TYPE = XML
                 STRIP_OUTER_ELEMENT = TRUE
         """)
 
-        # RAW_POLICY_XML stores each <Policy> element verbatim as a VARIANT.
-        # This preserves the original XML structure for auditability and allows
-        # ad-hoc querying with XMLGET without committing to a fixed schema
-        # upfront — useful when the source format may evolve.
+        # ── Raw staging tables (one VARIANT row per XML element) ─────────────
         cur.execute(f"""
             CREATE OR REPLACE TABLE {db}.{schema}.RAW_POLICY_XML (SRC VARIANT)
         """)
         cur.execute(f"""
             COPY INTO {db}.{schema}.RAW_POLICY_XML
             FROM @{stage}/inbound/
+            PATTERN = '.*policy_freq.*'
             FILE_FORMAT = (FORMAT_NAME = '{ff}')
             PURGE = FALSE
         """)
-        rows_loaded = cur.fetchone()
-        print(f"  RAW_POLICY_XML loaded: {rows_loaded}")
+        rows = cur.fetchone()
+        print(f"  RAW_POLICY_XML: {rows}")
 
-        # Parse the VARIANT XML into typed columns matching HOME_POLICY_FREQ.
-        # XMLGET(node, 'Tag'):$ extracts the text content of the named element.
-        # Chained calls like XMLGET(XMLGET(src, 'Risk'), 'TerritoryCode')
-        # navigate nested elements without any schema pre-declaration.
         cur.execute(f"""
-            CREATE OR REPLACE TABLE {db}.{schema}.HOME_POLICY_FREQ_XML AS
+            CREATE OR REPLACE TABLE {db}.{schema}.RAW_CLAIM_XML (SRC VARIANT)
+        """)
+        cur.execute(f"""
+            COPY INTO {db}.{schema}.RAW_CLAIM_XML
+            FROM @{stage}/inbound/
+            PATTERN = '.*policy_sev.*'
+            FILE_FORMAT = (FORMAT_NAME = '{ff}')
+            PURGE = FALSE
+        """)
+        rows = cur.fetchone()
+        print(f"  RAW_CLAIM_XML:  {rows}")
+
+        # ── HOME_POLICY_FREQ: parse VARIANT → typed columns ───────────────────
+        # XMLGET(node, 'Tag'):"$" extracts the text content of the element.
+        # The "$ path accessor must be double-quoted in Snowflake SQL.
+        # Chained calls navigate nested elements: XMLGET(XMLGET(src,'Risk'),'X').
+        cur.execute(f"""
+            CREATE OR REPLACE TABLE {db}.{schema}.HOME_POLICY_FREQ AS
             SELECT
-                XMLGET(SRC, 'PolicyId'):$::BIGINT          AS POLICY_ID,
-                XMLGET(SRC, 'Exposure'):$::FLOAT           AS EXPOSURE,
-                XMLGET(SRC, 'PolicyholderAge'):$::INTEGER  AS POLICYHOLDER_AGE,
-                XMLGET(SRC, 'LossHistoryScore'):$::FLOAT   AS LOSS_HISTORY_SCORE,
-                XMLGET(SRC, 'PopulationDensity'):$::FLOAT  AS POPULATION_DENSITY,
-                XMLGET(SRC, 'RegionCode'):$::VARCHAR       AS REGION_CODE,
-                XMLGET(XMLGET(SRC, 'Risk'), 'TerritoryCode'):$::VARCHAR      AS TERRITORY_CODE,
-                XMLGET(XMLGET(SRC, 'Risk'), 'ConstructionType'):$::VARCHAR   AS CONSTRUCTION_TYPE,
-                XMLGET(XMLGET(SRC, 'Risk'), 'ConstructionQuality'):$::INTEGER AS CONSTRUCTION_QUALITY,
-                XMLGET(XMLGET(SRC, 'Risk'), 'PropertyAge'):$::INTEGER        AS PROPERTY_AGE,
-                XMLGET(XMLGET(SRC, 'Risk'), 'OccupancyType'):$::VARCHAR      AS OCCUPANCY_TYPE,
-                XMLGET(XMLGET(SRC, 'Claims'), 'ClaimCount'):$::INTEGER       AS CLAIM_COUNT
+                XMLGET(SRC, 'PolicyId'):"$"::BIGINT          AS POLICY_ID,
+                XMLGET(SRC, 'Exposure'):"$"::FLOAT           AS EXPOSURE,
+                XMLGET(SRC, 'PolicyholderAge'):"$"::INTEGER  AS POLICYHOLDER_AGE,
+                XMLGET(SRC, 'LossHistoryScore'):"$"::FLOAT   AS LOSS_HISTORY_SCORE,
+                XMLGET(SRC, 'PopulationDensity'):"$"::FLOAT  AS POPULATION_DENSITY,
+                XMLGET(SRC, 'RegionCode'):"$"::VARCHAR       AS REGION_CODE,
+                XMLGET(XMLGET(SRC, 'Risk'), 'TerritoryCode'):"$"::VARCHAR      AS TERRITORY_CODE,
+                XMLGET(XMLGET(SRC, 'Risk'), 'ConstructionType'):"$"::VARCHAR   AS CONSTRUCTION_TYPE,
+                XMLGET(XMLGET(SRC, 'Risk'), 'ConstructionQuality'):"$"::INTEGER AS CONSTRUCTION_QUALITY,
+                XMLGET(XMLGET(SRC, 'Risk'), 'PropertyAge'):"$"::INTEGER        AS PROPERTY_AGE,
+                XMLGET(XMLGET(SRC, 'Risk'), 'OccupancyType'):"$"::VARCHAR      AS OCCUPANCY_TYPE,
+                XMLGET(XMLGET(SRC, 'Claims'), 'ClaimCount'):"$"::INTEGER       AS CLAIM_COUNT
             FROM {db}.{schema}.RAW_POLICY_XML
         """)
-        print(
-            f"  HOME_POLICY_FREQ_XML created — same schema as HOME_POLICY_FREQ, sourced from XML."
-        )
+        count = cur.execute(
+            f"SELECT COUNT(*) FROM {db}.{schema}.HOME_POLICY_FREQ"
+        ).fetchone()[0]
+        print(f"  HOME_POLICY_FREQ: {count:,} rows")
+
+        # ── HOME_POLICY_SEV: parse VARIANT → typed columns ────────────────────
+        cur.execute(f"""
+            CREATE OR REPLACE TABLE {db}.{schema}.HOME_POLICY_SEV AS
+            SELECT
+                XMLGET(SRC, 'PolicyId'):"$"::BIGINT    AS POLICY_ID,
+                XMLGET(SRC, 'ClaimAmount'):"$"::FLOAT  AS CLAIM_AMOUNT
+            FROM {db}.{schema}.RAW_CLAIM_XML
+        """)
+        count = cur.execute(
+            f"SELECT COUNT(*) FROM {db}.{schema}.HOME_POLICY_SEV"
+        ).fetchone()[0]
+        print(f"  HOME_POLICY_SEV:  {count:,} rows")
+
+        print("\nDone.")
 
     finally:
         cur.close()
@@ -576,63 +620,6 @@ def build_connection(
     )
 
 
-def load_to_snowflake(
-    freq_df: pd.DataFrame,
-    sev_df: pd.DataFrame,
-    args: argparse.Namespace,
-) -> None:
-    """Load the frequency and severity DataFrames into Snowflake tables.
-
-    Uses ``write_pandas`` from the Snowflake Python Connector, which:
-
-    - Stages the DataFrame as compressed Parquet files in a temporary stage.
-    - Issues a ``COPY INTO`` to load from the stage into the target table.
-    - With ``auto_create_table=True`` the table DDL is inferred from the
-      DataFrame's dtypes (``int64`` → ``BIGINT``, ``float64`` → ``FLOAT``,
-      ``object`` → ``VARCHAR``).
-    - With ``overwrite=True`` the table is truncated before each load, making
-      re-runs idempotent.
-
-    Docs:
-        https://docs.snowflake.com/en/developer-guide/python-connector/python-connector-pandas
-
-    Args:
-        freq_df: Transformed HOME_POLICY_FREQ DataFrame (~678 K rows).
-        sev_df:  Transformed HOME_POLICY_SEV DataFrame (~26 K rows).
-        args:    Parsed CLI arguments (provides database, schema).
-    """
-    conn = build_connection(args)
-
-    print(f"Loading HOME_POLICY_FREQ into {args.database}.{args.schema}...")
-    success, nchunks, nrows, _ = write_pandas(
-        conn=conn,
-        df=freq_df,
-        table_name="HOME_POLICY_FREQ",
-        database=args.database,
-        schema=args.schema,
-        auto_create_table=True,
-        overwrite=True,
-        quote_identifiers=False,
-    )
-    print(f"  HOME_POLICY_FREQ: success={success}, chunks={nchunks}, rows={nrows}")
-
-    print(f"Loading HOME_POLICY_SEV into {args.database}.{args.schema}...")
-    success, nchunks, nrows, _ = write_pandas(
-        conn=conn,
-        df=sev_df,
-        table_name="HOME_POLICY_SEV",
-        database=args.database,
-        schema=args.schema,
-        auto_create_table=True,
-        overwrite=True,
-        quote_identifiers=False,
-    )
-    print(f"  HOME_POLICY_SEV:  success={success}, chunks={nchunks}, rows={nrows}")
-
-    conn.close()
-    print("\nDone.")
-
-
 if __name__ == "__main__":
     args = parse_args()
 
@@ -648,7 +635,4 @@ if __name__ == "__main__":
     print(sev_df.dtypes)
     print(sev_df.head(2).to_string())
 
-    load_to_snowflake(freq_df, sev_df, args)
-
-    if not args.skip_xml:
-        load_xml_to_snowflake(freq_df, args)
+    load_xml_to_snowflake(freq_df, sev_df, args)
