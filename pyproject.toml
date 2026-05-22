@@ -27,7 +27,9 @@ dependencies = [
 dev = [
     "black>=26.5.1",
     "ipykernel>=6.29",   # run notebook in VS Code / Jupyter Lab
+    "isort>=8.0.1",
     "nbstripout>=0.9.1",
+    "pre-commit>=4.0",
 ]
 
 [build-system]
@@ -37,3 +39,11 @@ build-backend = "hatchling.build"
 [tool.uv]
 # scripts-only project — do not attempt to build/install as a Python package
 package = false
+
+[tool.black]
+target-version = ["py311"]
+line-length = 88
+
+[tool.isort]
+profile = "black"          # ensures isort output is black-compatible
+known_first_party = ["config", "helpers"]

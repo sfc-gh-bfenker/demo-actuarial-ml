@@ -1,0 +1,26 @@
+# Pre-commit hooks — all run via `uv run` so they use the exact versions
+# pinned in uv.lock rather than pre-commit's isolated environments.
+#
+# Setup:   uv sync --group dev && uv run pre-commit install
+# Run all: uv run pre-commit run --all-files
+
+repos:
+  - repo: local
+    hooks:
+      - id: black
+        name: black
+        entry: uv run black
+        language: system
+        types: [python]
+
+      - id: isort
+        name: isort
+        entry: uv run isort
+        language: system
+        types: [python]
+
+      - id: nbstripout
+        name: nbstripout
+        entry: uv run nbstripout
+        language: system
+        types: [jupyter]
