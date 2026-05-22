@@ -41,3 +41,5 @@ scikit_learn_data/
 
 # OS
 Thumbs.db
+*.log
+.cortex/
