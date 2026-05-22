@@ -49,15 +49,18 @@ import os
 import matplotlib
 
 matplotlib.use("Agg")  # headless backend — must be set before any other plt import
-from matplotlib import pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from sklearn.metrics import auc
 from snowflake.ml.dataset import load_dataset
 from snowflake.ml.experiment import ExperimentTracking
-from snowflake.ml.modeling.xgboost import XGBRegressor  # type: ignore -> available on SPCS
-from snowflake.snowpark import Session, functions as F
+from snowflake.ml.modeling.xgboost import (
+    XGBRegressor,  # type: ignore -> available on SPCS
+)
+from snowflake.snowpark import Session
+from snowflake.snowpark import functions as F
 
 # Spine columns added by the Feature Store at dataset generation time.
 # These are excluded when deriving the feature column list for training.
@@ -380,7 +383,7 @@ def train(
         # per-epoch training loss.
         tracker.log_metrics({"val_rmse": val_rmse, "val_mae": val_mae})
 
-            # ── 7. Generate and upload diagnostic plots ───────────────────────────
+        # ── 7. Generate and upload diagnostic plots ───────────────────────────
         # Plots are saved to /tmp (available in both local and SPCS container
         # environments) then uploaded via ``log_artifact``.  Artifacts are
         # stored in the experiment's internal Snowflake stage and appear in the
@@ -410,7 +413,7 @@ def train(
         ax.legend()
         fig_gini.savefig("/tmp/gini_lorenz.png", dpi=150, bbox_inches="tight")
         plt.close(fig_gini)
-        
+
         # ── 6. Log model ──────────────────────────────────────────────────────
         # ``tracker.log_model`` does two things in one call:
         #   (a) registers the fitted model as a versioned entry in the Snowflake
@@ -440,16 +443,14 @@ def train(
             },
         )  # type: ignore
 
-
-
         tracker.log_artifact("/tmp/double_lift.png")
         tracker.log_artifact("/tmp/gini_lorenz.png")
-        
+
         # Generate SHAP-based explanations using the Model Registry's built-in
         # explainability function (enabled above via enable_explainability=True).
         # The returned Snowpark DataFrame contains per-feature SHAP values for
         # each validation row — useful for regulatory feature importance exhibits.
-        explanations = mv.run(val_sdf, function_name="explain")
+        mv.run(val_sdf, function_name="explain")
         print(f"Registered model ACTUARIAL_GBM {model_version}")
 
     finally:

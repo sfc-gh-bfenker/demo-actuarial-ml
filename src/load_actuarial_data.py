@@ -72,15 +72,16 @@ import tempfile
 
 import pandas as pd
 import snowflake.connector
+
+from config import DATABASE as DEFAULT_DATABASE
 from config import (
-    DATABASE as DEFAULT_DATABASE,
-    SCHEMA as DEFAULT_SCHEMA,
-    ROLE as DEFAULT_ROLE,
-    WAREHOUSE as DEFAULT_WAREHOUSE,
     DEFAULT_ACCOUNT,
-    DEFAULT_USER,
     DEFAULT_PRIVATE_KEY_FILE,
+    DEFAULT_USER,
 )
+from config import ROLE as DEFAULT_ROLE
+from config import SCHEMA as DEFAULT_SCHEMA
+from config import WAREHOUSE as DEFAULT_WAREHOUSE
 
 # ── SSL patch (corporate certificate environment) ─────────────────────────────
 # Some corporate networks intercept HTTPS with a custom CA.  Disabling

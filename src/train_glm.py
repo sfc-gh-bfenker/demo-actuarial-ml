@@ -76,17 +76,20 @@ import os
 import matplotlib
 
 matplotlib.use("Agg")  # headless backend — must be set before any other plt import
-from matplotlib import pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from sklearn.linear_model import TweedieRegressor as _SkTweedie
 from sklearn.metrics import auc, mean_squared_error
 from sklearn.model_selection import KFold
 from snowflake.ml.dataset import load_dataset
 from snowflake.ml.experiment import ExperimentTracking
-from snowflake.ml.modeling.linear_model import TweedieRegressor  # type: ignore -> available on SPCS
-from snowflake.snowpark import Session, functions as F
+from snowflake.ml.modeling.linear_model import (
+    TweedieRegressor,  # type: ignore -> available on SPCS
+)
+from snowflake.snowpark import Session
+from snowflake.snowpark import functions as F
 
 # Spine columns added by the Feature Store at dataset generation time.
 # These are excluded when deriving the feature column list for training.
@@ -422,7 +425,9 @@ def train(
             cv_rmse_mean = float(np.mean(fold_rmses))
             cv_rmse_std = float(np.std(fold_rmses))
             print(f"CV RMSE  {cv_rmse_mean:.4f} ± {cv_rmse_std:.4f}")
-            tracker.log_metrics({"cv_rmse_mean": cv_rmse_mean, "cv_rmse_std": cv_rmse_std})
+            tracker.log_metrics(
+                {"cv_rmse_mean": cv_rmse_mean, "cv_rmse_std": cv_rmse_std}
+            )
 
         # ── 4. Train Snowflake-managed Tweedie GLM ────────────────────────────
         # ``snowflake.ml.modeling.linear_model.TweedieRegressor`` wraps
@@ -483,7 +488,7 @@ def train(
         # coefficient inspection (glm.to_sklearn().coef_) provides interpretability
         # for GLMs without requiring SHAP.
         # Docs: https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview
-        mv = tracker.log_model(
+        tracker.log_model(
             model=glm,
             model_name="ACTUARIAL_GLM",
             version_name=model_version,

@@ -58,14 +58,17 @@ from snowflake.snowpark.context import get_active_session
 
 from config import DATABASE, SCHEMA
 from helpers import double_lift_chart, lorenz_curve
+
 try:
-        from snowflake.ml.modeling.distributors.xgboost import (  # type: ignore
+    from snowflake.ml.modeling.distributors.xgboost import (  # type: ignore
         XGBEstimator,
         XGBScalingConfig,
     )
 except ImportError as err:
-    print("Package only available within SPCS service. This script is intended only to run as an MLJob")
-    raise(err)
+    print(
+        "Package only available within SPCS service. This script is intended only to run as an MLJob"
+    )
+    raise (err)
 
 
 # Spine columns added by the Feature Store at dataset generation time.
@@ -75,7 +78,6 @@ _SPINE_COLS = {"POLICY_ID", "PURE_PREMIUM", "EXPOSURE"}
 # Snowflake Experiments groups runs into a named experiment so all training
 # runs for this model are visible together in the Snowsight Experiments UI.
 EXPERIMENT = "ACTUARIAL_GBM_TRAINING"
-
 
 
 def train(
@@ -166,7 +168,8 @@ def train(
 
         # Column names only — lazy plan inspection, no SQL executed.
         feature_cols = [
-            c for c in training_dataset.read.to_snowpark_dataframe().columns
+            c
+            for c in training_dataset.read.to_snowpark_dataframe().columns
             if c not in _SPINE_COLS
         ]
         print(f"Feature columns ({len(feature_cols)}): {feature_cols[:5]} ...")
@@ -206,7 +209,9 @@ def train(
             },
             scaling_config=XGBScalingConfig(),
         )
-        booster = gbm.fit(train_connector, input_cols=feature_cols, label_col="PURE_PREMIUM")
+        booster = gbm.fit(
+            train_connector, input_cols=feature_cols, label_col="PURE_PREMIUM"
+        )
         print("Model training complete")
 
         # ── 5. Evaluate ───────────────────────────────────────────────────────
@@ -217,7 +222,11 @@ def train(
         df_val["PREDICTED_PURE_PREMIUM"] = gbm.predict(df_val[feature_cols].values)
 
         val_rmse = float(
-            np.sqrt(np.mean((df_val["PURE_PREMIUM"] - df_val["PREDICTED_PURE_PREMIUM"]) ** 2))
+            np.sqrt(
+                np.mean(
+                    (df_val["PURE_PREMIUM"] - df_val["PREDICTED_PURE_PREMIUM"]) ** 2
+                )
+            )
         )
         val_mae = float(
             np.mean(np.abs(df_val["PURE_PREMIUM"] - df_val["PREDICTED_PURE_PREMIUM"]))
@@ -250,7 +259,9 @@ def train(
             metrics={"val_rmse": val_rmse, "val_mae": val_mae},
             options={"enable_explainability": True},
             target_platforms=["WAREHOUSE", "SNOWPARK_CONTAINER_SERVICES"],
-            sample_input_data=training_dataset.read.to_snowpark_dataframe().select(feature_cols).limit(10),
+            sample_input_data=training_dataset.read.to_snowpark_dataframe()
+            .select(feature_cols)
+            .limit(10),
         )  # type: ignore
 
         # ── 7. Generate and upload diagnostic plots ───────────────────────────
@@ -283,6 +294,7 @@ def train(
         tracker.log_artifact("/tmp/double_lift.png")
         tracker.log_artifact("/tmp/gini_lorenz.png")
 
+
 if __name__ == "__main__":
     # SNOWFLAKE_SERVICE_NAME is injected automatically into the container
     # environment by the SPCS runtime.  Using it as the default model version
@@ -292,7 +304,9 @@ if __name__ == "__main__":
     # version and the run that produced it share the same ID.
     default_version = os.environ.get("SNOWFLAKE_SERVICE_NAME", "v1")
 
-    parser = argparse.ArgumentParser(description="Train actuarial GBM model (distributed).")
+    parser = argparse.ArgumentParser(
+        description="Train actuarial GBM model (distributed)."
+    )
     parser.add_argument(
         "--ds-version", default="1", help="Feature Store dataset version"
     )
