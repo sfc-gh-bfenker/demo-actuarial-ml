@@ -21,81 +21,33 @@ batch scoring, and SHAP explainability — all running on Snowflake compute.
 
 ## Setup
 
-### 1. Clone the repository
+### 1. Run setup.sql
+
+Open `setup.sql` in a Snowflake worksheet and run it top-to-bottom.
+Requires **ACCOUNTADMIN**. Creates the database, schema, warehouse, compute pool,
+role, and stages. No editing needed — defaults match what the demo expects.
+
+> To use custom object names, see [CUSTOMIZING.md](CUSTOMIZING.md).
+
+### 2. Load data
 
 ```bash
-git clone <repo-url>
-cd actuarial-pricing-demo
+python src/load_actuarial_data.py
 ```
 
-### 2. Configure your environment
+Downloads the freMTPL2 dataset from [OpenML](https://www.openml.org/d/41214),
+converts it to XML, and uploads it to the Snowflake stage (~2 min).
+Pass `--help` for authentication options.
 
-Open **`config.py`** and update the four values at the top to match your Snowflake account:
+### 3. Create tables
 
-```python
-DATABASE     = "COUNTRY_ML"       # your target database
-SCHEMA       = "ACTUARIAL_PRICING" # your target schema
-ROLE         = "CUSTOMER_ROLE"     # role used for all operations
-WAREHOUSE    = "COMPUTE_WH"        # virtual warehouse
-COMPUTE_POOL = "DEMO_POOL"         # compute pool for ML Jobs
-```
+Run `create-table.sql` in a Snowflake worksheet.
+Parses the staged XML into `HOME_POLICY_FREQ` and `HOME_POLICY_SEV`.
 
-> `train.py` is a standalone script that runs inside SPCS containers. It has the same
-> five constants near the top of the file — update those to match when you change `config.py`.
+### 4. Run the notebook
 
----
-
-## Data Loading
-
-### Option A — Data already on a stage
-
-If your XML rating files have been provided and are already on a Snowflake stage,
-skip ahead to [Create the tables](#create-the-tables).
-
-Your stage should contain:
-- A `<PolicyFeed>` XML file with one `<Policy>` element per row (frequency data)
-- A `<ClaimFeed>` XML file with one `<Claim>` element per row (severity data)
-
-### Option B — Upload from scratch
-
-Install dependencies and run the loader:
-
-```bash
-pip install uv
-uv sync
-python load_actuarial_data.py --connection <your-connection-name>
-```
-
-This downloads the freMTPL2 dataset from OpenML, serialises both tables to XML,
-and uploads them to `OUTPUT_STAGE/inbound/` in your configured schema.
-It will take a few minutes on first run; subsequent runs use a local cache.
-
----
-
-## Create the Tables
-
-Open **`create-table.sql`** in a Snowflake worksheet and run it top-to-bottom.
-
-Before running, check the `USE` statements at the top of the file match your environment:
-
-```sql
-USE DATABASE COUNTRY_ML;
-USE SCHEMA   ACTUARIAL_PRICING;
-USE ROLE     CUSTOMER_ROLE;
-USE WAREHOUSE COMPUTE_WH;
-```
-
-The script will:
-1. Create an XML file format with `STRIP_OUTER_ELEMENT = TRUE`
-2. Load both XML files into raw VARIANT staging tables
-3. Parse them into `HOME_POLICY_FREQ` (~678K rows) and `HOME_POLICY_SEV` (~26K rows)
-   using `XMLGET` — no schema pre-declaration required
-
-Row counts at the end of the script confirm a successful load.
-
-> The `PATTERN` clauses in the `COPY INTO` statements match files by name suffix
-> (`*policy_freq*` and `*policy_sev*`). If your files are named differently,
-> update those patterns.
+Open `notebooks/actuarial_pricing_demo.ipynb` in Snowflake Notebooks or a local
+Jupyter environment.
 
 ---
 
@@ -173,7 +125,7 @@ job name becomes the model version so every run is uniquely traceable.
 Make sure `payload_stage` exists in your schema before submitting:
 
 ```sql
-CREATE STAGE IF NOT EXISTS COUNTRY_ML.ACTUARIAL_PRICING.payload_stage
+CREATE STAGE IF NOT EXISTS payload_stage
     ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
 ```
 

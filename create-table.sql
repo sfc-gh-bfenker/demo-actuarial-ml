@@ -1,20 +1,21 @@
 -- =============================================================================
 -- create-table.sql
--- Load raw XML data from stage and create HOME_POLICY_FREQ / HOME_POLICY_SEV.
+-- =============================================================================
+-- Run after setup.sql and load_actuarial_data.py.
 --
--- Prerequisites:
---   1. XML files have been uploaded to OUTPUT_STAGE/inbound/ via
---      load_actuarial_data.py (or manually via PUT).
---   2. Update the USE statements below to match your environment if needed.
---
--- Run order: execute this file top-to-bottom in a Snowflake worksheet or
--- via SnowSQL / the Snowflake CLI.
+-- ⚙️  If you customized names in setup.sql, change the SET variables below
+--     to match. See CUSTOMIZING.md for the full customization checklist.
 -- =============================================================================
 
-USE DATABASE COUNTRY_ML;
-USE SCHEMA   ACTUARIAL_PRICING;
-USE ROLE     ACCOUNTADMIN;
-USE WAREHOUSE COMPUTE_WH;
+-- ⚙️  Match these to setup.sql and src/config.py
+SET db_name    = 'ACTUARIAL_DEMO_DB';
+SET schema_name = 'ACTUARIAL_PRICING';
+SET wh_name    = 'ACTUARIAL_DEMO_WH';
+SET role_name  = 'ACTUARIAL_DEMO_ROLE';
+
+USE ROLE      IDENTIFIER($role_name);
+USE WAREHOUSE IDENTIFIER($wh_name);
+USE SCHEMA    IDENTIFIER($db_name || '.' || $schema_name);
 
 -- =============================================================================
 -- 1. File format

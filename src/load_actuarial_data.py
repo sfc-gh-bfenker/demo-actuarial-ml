@@ -21,13 +21,10 @@ Usage
     overridden via CLI flags or environment variables:
 
       --connection        SNOWFLAKE_CONNECTION   named connection from connections.toml
-      --account           SNOWFLAKE_ACCOUNT
-      --user              SNOWFLAKE_USER
       --role              SNOWFLAKE_ROLE
       --warehouse         SNOWFLAKE_WAREHOUSE
       --database          SNOWFLAKE_DATABASE
       --schema            SNOWFLAKE_SCHEMA
-      --private-key-file  SNOWFLAKE_PRIVATE_KEY_FILE
 
 Tables written
 --------------
@@ -51,8 +48,6 @@ Python Connector:
     https://docs.snowflake.com/en/developer-guide/python-connector/python-connector
 Named connections (connections.toml):
     https://docs.snowflake.com/en/developer-guide/python-connector/python-connector-connect#using-a-connection-string
-Key-pair authentication:
-    https://docs.snowflake.com/en/user-guide/key-pair-auth
 PUT command (local file → stage):
     https://docs.snowflake.com/en/sql-reference/sql/put
 COPY INTO <table> (stage → table):
@@ -74,11 +69,6 @@ import pandas as pd
 import snowflake.connector
 
 from config import DATABASE as DEFAULT_DATABASE
-from config import (
-    DEFAULT_ACCOUNT,
-    DEFAULT_PRIVATE_KEY_FILE,
-    DEFAULT_USER,
-)
 from config import ROLE as DEFAULT_ROLE
 from config import SCHEMA as DEFAULT_SCHEMA
 from config import WAREHOUSE as DEFAULT_WAREHOUSE
@@ -90,10 +80,6 @@ from config import WAREHOUSE as DEFAULT_WAREHOUSE
 ssl._create_default_https_context = ssl._create_unverified_context
 
 from sklearn.datasets import fetch_openml  # noqa: E402 (import after ssl patch)
-
-# ── Connection defaults ───────────────────────────────────────────────────────
-# Imported from config.py — edit that file to change environment defaults.
-# Override any value via the corresponding CLI flag or environment variable.
 
 # ── freMTPL2 → homeowners column rename maps ──────────────────────────────────
 # The source dataset uses French motor insurance terminology.  Columns are
@@ -154,16 +140,6 @@ def parse_args() -> argparse.Namespace:
         help="Named connection from connections.toml (env: SNOWFLAKE_CONNECTION).",
     )
     parser.add_argument(
-        "--account",
-        default=os.environ.get("SNOWFLAKE_ACCOUNT", DEFAULT_ACCOUNT),
-        help="Snowflake account identifier (env: SNOWFLAKE_ACCOUNT).",
-    )
-    parser.add_argument(
-        "--user",
-        default=os.environ.get("SNOWFLAKE_USER", DEFAULT_USER),
-        help="Snowflake username (env: SNOWFLAKE_USER).",
-    )
-    parser.add_argument(
         "--role",
         default=os.environ.get("SNOWFLAKE_ROLE", DEFAULT_ROLE),
         help="Snowflake role (env: SNOWFLAKE_ROLE).",
@@ -182,12 +158,6 @@ def parse_args() -> argparse.Namespace:
         "--schema",
         default=os.environ.get("SNOWFLAKE_SCHEMA", DEFAULT_SCHEMA),
         help="Target schema (env: SNOWFLAKE_SCHEMA).",
-    )
-    parser.add_argument(
-        "--private-key-file",
-        default=os.environ.get("SNOWFLAKE_PRIVATE_KEY_FILE", DEFAULT_PRIVATE_KEY_FILE),
-        dest="private_key_file",
-        help="Path to RSA private key file for JWT auth (env: SNOWFLAKE_PRIVATE_KEY_FILE).",
     )
     return parser.parse_args()
 
@@ -410,6 +380,7 @@ def load_xml_to_snowflake(
     freq_df: pd.DataFrame,
     sev_df: pd.DataFrame,
     args: argparse.Namespace,
+    conn: "snowflake.connector.SnowflakeConnection",
 ) -> None:
     """Serialise both DataFrames to XML, upload to Snowflake, and create tables.
 
@@ -440,6 +411,7 @@ def load_xml_to_snowflake(
         freq_df: Transformed frequency DataFrame (~678 K rows).
         sev_df:  Transformed severity DataFrame (~26 K rows).
         args:    Parsed CLI arguments (provides database, schema).
+        conn:    Open Snowflake connection.
     """
     db = args.database
     schema = args.schema
@@ -454,7 +426,6 @@ def load_xml_to_snowflake(
     sev_xml = generate_sev_xml(sev_df)
     print(f"  sev  XML: {len(sev_xml) / 1_000_000:.1f} MB")
 
-    conn = build_connection(args)
     cur = conn.cursor()
 
     try:
@@ -570,57 +541,6 @@ def load_xml_to_snowflake(
         conn.close()
 
 
-def build_connection(
-    args: argparse.Namespace,
-) -> snowflake.connector.SnowflakeConnection:
-    """Build a Snowflake Python Connector connection from parsed CLI arguments.
-
-    Two authentication paths are supported:
-
-    **Named connection** (``--connection`` / ``SNOWFLAKE_CONNECTION``):
-        Reads credentials from the ``[connections.<name>]`` block in
-        ``~/.snowflake/connections.toml``.  No credentials appear in code or
-        environment variables.  Recommended for local development.
-        Docs: https://docs.snowflake.com/en/developer-guide/python-connector/python-connector-connect#using-a-connection-string
-
-    **JWT / key-pair auth** (default):
-        Connects using an RSA private key file.  Suitable for CI/CD pipelines
-        and service accounts where interactive login is not available.
-        Docs: https://docs.snowflake.com/en/user-guide/key-pair-auth
-
-    In both cases, ``database``, ``schema``, ``role``, and ``warehouse`` are
-    applied on top of the base connection so that CLI overrides take effect
-    even when using a named connection with different defaults.
-
-    Args:
-        args: Parsed CLI arguments.
-
-    Returns:
-        An open ``SnowflakeConnection`` ready for cursor operations.
-    """
-    if args.connection:
-        print(f"Connecting via named connection '{args.connection}'...")
-        return snowflake.connector.connect(
-            connection_name=args.connection,
-            role=args.role,
-            warehouse=args.warehouse,
-            database=args.database,
-            schema=args.schema,
-        )
-
-    print(f"Connecting to {args.account} as {args.user}...")
-    return snowflake.connector.connect(
-        account=args.account,
-        user=args.user,
-        authenticator="SNOWFLAKE_JWT",
-        private_key_file=args.private_key_file,
-        role=args.role,
-        warehouse=args.warehouse,
-        database=args.database,
-        schema=args.schema,
-    )
-
-
 if __name__ == "__main__":
     args = parse_args()
 
@@ -636,4 +556,15 @@ if __name__ == "__main__":
     print(sev_df.dtypes)
     print(sev_df.head(2).to_string())
 
-    load_xml_to_snowflake(freq_df, sev_df, args)
+    connection_name = (
+        args.connection or os.environ.get("SNOWFLAKE_CONNECTION") or "default"
+    )
+    print(f"Connecting via named connection '{connection_name}'...")
+    conn = snowflake.connector.connect(
+        connection_name=connection_name,
+        database=args.database,
+        schema=args.schema,
+        role=args.role,
+        warehouse=args.warehouse,
+    )
+    load_xml_to_snowflake(freq_df, sev_df, args, conn)
