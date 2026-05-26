@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
+from sklearn.metrics import auc
 
 
 def lorenz_curve(y_true, y_pred, exposure):
@@ -132,3 +133,51 @@ def double_lift_chart(
 
     plt.tight_layout()
     return fig
+
+
+def generate_diagnostic_plots(
+    df_val: pd.DataFrame,
+    model_label: str,
+    output_dir: str = "/tmp",
+) -> list:
+    """Generate double-lift chart and Gini/Lorenz curve for a pricing model.
+
+    Saves both plots to ``output_dir`` and returns their paths.  The returned
+    list can be passed directly to ``tracker.log_artifact`` and to the
+    ``user_files`` argument of ``tracker.log_model``.
+
+    Args:
+        df_val:       Validation DataFrame.  Must contain ``PURE_PREMIUM``,
+                      ``PREDICTED_PURE_PREMIUM``, and ``EXPOSURE`` columns.
+        model_label:  Short label used in chart titles and the Gini legend
+                      (e.g. ``"GBM"`` or ``"GLM"``).
+        output_dir:   Directory for saved PNG files.  Defaults to ``"/tmp"``.
+
+    Returns:
+        ``[lift_path, gini_path]`` — absolute paths to the saved PNG files.
+    """
+    df_plot = df_val.copy()
+    # double_lift_chart expects a "PurePremium" (camelCase) column by default.
+    df_plot["PurePremium"] = df_plot["PURE_PREMIUM"]
+
+    lift_path = f"{output_dir}/double_lift.png"
+    gini_path = f"{output_dir}/gini_lorenz.png"
+
+    fig_lift = double_lift_chart(
+        df_plot, {model_label: df_plot["PREDICTED_PURE_PREMIUM"].values}, n_bins=10
+    )
+    fig_lift.savefig(lift_path, dpi=150, bbox_inches="tight")
+    plt.close(fig_lift)
+
+    fig_gini, ax = plt.subplots(figsize=(8, 8))
+    cum_exp, cum_claims = lorenz_curve(
+        df_plot["PURE_PREMIUM"], df_plot["PREDICTED_PURE_PREMIUM"], df_plot["EXPOSURE"]
+    )
+    gini = 1 - 2 * auc(cum_exp, cum_claims)
+    ax.plot(cum_exp, cum_claims, label=f"{model_label} (Gini={gini:.3f})")
+    ax.plot([0, 1], [0, 1], "--k", label="Random")
+    ax.legend()
+    fig_gini.savefig(gini_path, dpi=150, bbox_inches="tight")
+    plt.close(fig_gini)
+
+    return [lift_path, gini_path]

@@ -48,8 +48,6 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless backend — must be set before any other plt import
 import numpy as np
-from matplotlib import pyplot as plt
-from sklearn.metrics import auc
 from snowflake.ml.data.data_connector import DataConnector
 from snowflake.ml.dataset import load_dataset
 from snowflake.ml.experiment import ExperimentTracking
@@ -57,7 +55,7 @@ from snowflake.snowpark import Session
 from snowflake.snowpark.context import get_active_session
 
 from config import DATABASE, SCHEMA
-from helpers import double_lift_chart, lorenz_curve
+from helpers import generate_diagnostic_plots
 
 try:
     from snowflake.ml.modeling.distributors.xgboost import (  # type: ignore
@@ -105,12 +103,15 @@ def train(
        (``num_workers=-1``) automatically assigns one worker per node and
        allocates all available CPUs per worker.
     5. **Evaluation** — RMSE and MAE computed from pandas predictions on the
-       validation set (pulled once; reused for plots in step 7).
-    6. **Model registration** — ``tracker.log_model`` registers the native
+       validation set (pulled once; reused for plots in step 6).
+    6. **Diagnostic plots** — ``generate_diagnostic_plots`` creates the
+       double-lift chart and Gini/Lorenz curve, saves them to ``/tmp``, and
+       returns the file paths; attached to the model version via ``user_files``
+       so they travel with the model in the registry.
+    7. **Model registration** — ``tracker.log_model`` registers the native
        ``xgboost.Booster`` (extracted via ``get_booster()``) in the Snowflake
-       Model Registry and links the version to this experiment run.
-    7. **Artifact upload** — diagnostic plots saved to ``/tmp`` and uploaded
-       to the experiment's artifact store; visible in the Artifacts tab.
+       Model Registry, links the version to this experiment run, and attaches
+       the diagnostic plots as ``user_files``.
 
     Args:
         session:       Active Snowpark session (injected by Container Runtime).
@@ -239,12 +240,20 @@ def train(
         # per-epoch training loss.
         tracker.log_metrics({"val_rmse": val_rmse, "val_mae": val_mae})
 
-        # ── 6. Log model ──────────────────────────────────────────────────────
+        # ── 6. Generate diagnostic plots ──────────────────────────────────────
+        # generate_diagnostic_plots saves double-lift and Gini/Lorenz plots to
+        # /tmp and returns their paths for use in user_files and log_artifact.
+        plot_paths = generate_diagnostic_plots(df_val, "GBM")
+
+        # ── 7. Log model ──────────────────────────────────────────────────────
         # ``tracker.log_model`` does two things in one call:
         #   (a) registers the fitted model as a versioned entry in the Snowflake
         #       Model Registry (visible under AI & ML → Models in Snowsight), and
         #   (b) links that model version back to this experiment run so the run
         #       record shows which model it produced.
+        # ``user_files`` attaches the diagnostic plots directly to the model
+        #   version so they are accessible wherever the model is used, not just
+        #   in the experiment run artifacts.
         # ``target_platforms`` controls where the model can be served:
         #   WAREHOUSE  → mv.run() for batch scoring on a virtual warehouse
         #   SNOWPARK_CONTAINER_SERVICES → mv.run_batch() on a compute pool
@@ -262,37 +271,11 @@ def train(
             sample_input_data=training_dataset.read.to_snowpark_dataframe()
             .select(feature_cols)
             .limit(10),
+            user_files={"artifacts": plot_paths},
         )  # type: ignore
 
-        # ── 7. Generate and upload diagnostic plots ───────────────────────────
-        # Plots are saved to /tmp (available in both local and SPCS container
-        # environments) then uploaded via ``log_artifact``.  Artifacts are
-        # stored in the experiment's internal Snowflake stage and appear in the
-        # Artifacts tab of the run in Snowsight.
-        # df_val and PREDICTED_PURE_PREMIUM already populated in step 5.
-        df_val["PurePremium"] = df_val["PURE_PREMIUM"]
-
-        # double_lift_chart creates and returns its own figure — no plt.subplots()
-        # call is needed before it.
-        fig_lift = double_lift_chart(
-            df_val, {"GBM": df_val["PREDICTED_PURE_PREMIUM"].values}, n_bins=10
-        )
-        fig_lift.savefig("/tmp/double_lift.png", dpi=150, bbox_inches="tight")
-        plt.close(fig_lift)
-
-        fig_gini, ax = plt.subplots(figsize=(8, 8))
-        cum_exp, cum_claims = lorenz_curve(
-            df_val["PURE_PREMIUM"], df_val["PREDICTED_PURE_PREMIUM"], df_val["EXPOSURE"]
-        )
-        gini = 1 - 2 * auc(cum_exp, cum_claims)
-        ax.plot(cum_exp, cum_claims, label=f"GBM (Gini={gini:.3f})")
-        ax.plot([0, 1], [0, 1], "--k", label="Random")
-        ax.legend()
-        fig_gini.savefig("/tmp/gini_lorenz.png", dpi=150, bbox_inches="tight")
-        plt.close(fig_gini)
-
-        tracker.log_artifact("/tmp/double_lift.png")
-        tracker.log_artifact("/tmp/gini_lorenz.png")
+        for path in plot_paths:
+            tracker.log_artifact(path)
 
 
 if __name__ == "__main__":

@@ -41,13 +41,14 @@ Local::
 
 As a Snowflake ML Job::
 
-    from snowflake.ml.jobs import submit_file
+    from snowflake.ml.jobs import submit_directory
 
-    job = submit_file(
-        "train_glm.py",
+    job = submit_directory(
+        "src/",
+        entrypoint="train_glm.py",
         compute_pool="DEMO_POOL",
         stage_name="payload_stage",
-        query_warehouse="COMPUTE_WH",   # required — USE WAREHOUSE is blocked inside the container
+        query_warehouse="COMPUTE_WH",
         args=["--ds-version=1"],
         session=session,
     )
@@ -66,8 +67,6 @@ Model Registry:
     https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview
 Snowpark ML Modeling (TweedieRegressor):
     https://docs.snowflake.com/en/developer-guide/snowflake-ml/modeling/overview
-Snowpark Session:
-    https://docs.snowflake.com/en/developer-guide/snowpark/python/creating-session
 """
 
 import argparse
@@ -76,12 +75,9 @@ import os
 import matplotlib
 
 matplotlib.use("Agg")  # headless backend — must be set before any other plt import
-import matplotlib.ticker as mticker
 import numpy as np
-import pandas as pd
-from matplotlib import pyplot as plt
 from sklearn.linear_model import TweedieRegressor as _SkTweedie
-from sklearn.metrics import auc, mean_squared_error
+from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
 from snowflake.ml.dataset import load_dataset
 from snowflake.ml.experiment import ExperimentTracking
@@ -91,6 +87,9 @@ from snowflake.ml.modeling.linear_model import (
 from snowflake.snowpark import Session
 from snowflake.snowpark import functions as F
 
+from config import DATABASE, SCHEMA, create_session
+from helpers import generate_diagnostic_plots
+
 # Spine columns added by the Feature Store at dataset generation time.
 # These are excluded when deriving the feature column list for training.
 _SPINE_COLS = {"POLICY_ID", "PURE_PREMIUM", "EXPOSURE"}
@@ -98,159 +97,6 @@ _SPINE_COLS = {"POLICY_ID", "PURE_PREMIUM", "EXPOSURE"}
 # Snowflake Experiments groups runs into a named experiment so all training
 # runs for this model are visible together in the Snowsight Experiments UI.
 EXPERIMENT = "ACTUARIAL_GLM_TRAINING"
-
-# NOTE: train_glm.py runs as a standalone file inside a Snowflake ML Job
-# container and cannot import from config.py.  Update these constants directly
-# when changing environments.  See config.py for the local-script equivalents.
-DATABASE = "COUNTRY_ML"
-SCHEMA = "ACTUARIAL_PRICING"
-ROLE = "ACCOUNTADMIN"
-WAREHOUSE = "COMPUTE_WH"
-
-
-def lorenz_curve(y_true, y_pred, exposure):
-    """Compute the Lorenz curve for a pricing model's risk-discrimination ability.
-
-    Policies are ranked from safest (lowest predicted risk) to riskiest, then
-    cumulative exposure and cumulative claim amounts are computed along that
-    ranking.  A perfect model would rank all high-loss policies last; a random
-    model produces the diagonal (no discrimination).
-
-    The **Gini index** = 1 − 2 × AUC(lorenz_curve), where AUC is computed via
-    ``sklearn.metrics.auc``.  Higher Gini indicates better risk separation.
-    Gini curves are a standard exhibit in actuarial pricing reviews and
-    regulatory model-filing documentation.
-
-    Args:
-        y_true:   Array-like of observed pure premiums (or claim amounts).
-        y_pred:   Array-like of model-predicted pure premiums used for ranking.
-        exposure: Array-like of exposure weights (policy-years).
-
-    Returns:
-        Tuple ``(cum_exposure, cum_claims)``, both normalised to ``[0, 1]``,
-        suitable for passing directly to ``matplotlib.pyplot.plot`` and
-        ``sklearn.metrics.auc``.
-    """
-    y_true, y_pred, exposure = map(np.asarray, [y_true, y_pred, exposure])
-    rank = np.argsort(y_pred)
-    cum_claims = np.cumsum(y_true[rank] * exposure[rank])
-    cum_claims /= cum_claims[-1]
-    cum_exposure = np.cumsum(exposure[rank])
-    cum_exposure /= cum_exposure[-1]
-    return cum_exposure, cum_claims
-
-
-def double_lift_chart(
-    df_test, predictions_dict, weight="EXPOSURE", y_true="PurePremium", n_bins=10
-):
-    """Produce a double-lift chart — the standard actuarial model-validation exhibit.
-
-    Each model in ``predictions_dict`` receives its own subplot.  Test policies
-    are ranked into ``n_bins`` deciles by predicted pure premium (1 = safest,
-    ``n_bins`` = riskiest).  Within each decile, exposure-weighted *predicted*
-    and *observed* pure premiums are plotted side-by-side.
-
-    **What to look for:**
-
-    - Both lines should rise monotonically left → right (good risk ordering).
-    - Predicted and observed lines should track closely (good calibration).
-    - Large gaps in specific deciles reveal where the model misfits.
-
-    This chart is a required exhibit in most U.S. state rate-filing packages
-    and is used by internal pricing committees to validate model relativities
-    before deployment.
-
-    Args:
-        df_test:          Test-set DataFrame.  Must contain ``weight`` and
-                          ``y_true`` columns.
-        predictions_dict: ``{label: predictions_array}`` mapping.  One subplot
-                          is generated per entry.
-        weight:           Column name of the exposure weight.
-                          Defaults to ``"EXPOSURE"``.
-        y_true:           Column name of the observed pure premium.
-                          Defaults to ``"PurePremium"`` (add an alias column
-                          if your DataFrame uses a different name).
-        n_bins:           Number of risk deciles.  Defaults to ``10``.
-
-    Returns:
-        ``matplotlib.figure.Figure`` containing all subplots.  Call
-        ``fig.savefig(path)`` to persist, then pass the path to
-        ``tracker.log_artifact(path)`` to attach it to a Snowflake
-        Experiments run.
-    """
-    n = len(predictions_dict)
-    fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), sharey=False)
-    if n == 1:
-        axes = [axes]
-
-    for ax, (label, y_pred) in zip(axes, predictions_dict.items()):
-        tmp = df_test[[weight, y_true]].copy()
-        tmp["predicted"] = np.asarray(y_pred)
-        tmp["decile"] = (
-            pd.qcut(tmp["predicted"], q=n_bins, labels=False, duplicates="drop") + 1
-        )
-        agg = tmp.groupby("decile").apply(
-            lambda g: pd.Series(
-                {
-                    "Predicted": np.average(g["predicted"], weights=g[weight]),
-                    "Observed": np.average(g[y_true], weights=g[weight]),
-                }
-            )
-        )
-        x = agg.index.astype(int)
-        ax.plot(
-            x,
-            agg["Predicted"],
-            marker="o",
-            color="steelblue",
-            label="Predicted pure premium",
-        )
-        ax.plot(
-            x,
-            agg["Observed"],
-            marker="s",
-            color="darkorange",
-            linestyle="--",
-            label="Observed pure premium",
-        )
-        ax.set_xlabel("Risk Decile  (1 = safest → 10 = riskiest)")
-        ax.set_ylabel("Exposure-Weighted Pure Premium ($)")
-        ax.set_title(f"Double-Lift Chart — {label}")
-        ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-        ax.legend()
-
-    plt.tight_layout()
-    return fig
-
-
-def _get_session() -> Session:
-    """Return an active Snowpark session, using context when available.
-
-    When running inside a Snowflake Notebook or SPCS service (including ML
-    Jobs), ``get_active_session()`` returns the pre-configured session with no
-    credentials required — Snowflake injects the OAuth token automatically.
-
-    For local development the fallback reads connection details from the
-    ``default`` named connection in ``~/.snowflake/connections.toml``.
-
-    References:
-        https://docs.snowflake.com/en/developer-guide/snowpark/python/creating-session
-        https://docs.snowflake.com/en/developer-guide/python-connector/python-connector-connect
-    """
-    try:
-        from snowflake.snowpark.context import get_active_session
-
-        return get_active_session()
-    except Exception:
-        return Session.builder.configs(
-            {
-                "connection_name": "default",
-                "role": ROLE,
-                "warehouse": WAREHOUSE,
-                "database": DATABASE,
-                "schema": SCHEMA,
-            }
-        ).create()
 
 
 def train(
@@ -284,12 +130,9 @@ def train(
         CV RMSE are logged as experiment metrics for hyperparameter comparison.
     5. **Server-side evaluation** — RMSE and MAE are computed as Snowpark SQL
        aggregations; no rows are transferred to the client for scoring.
-    6. **Model registration** — ``tracker.log_model`` registers the fitted
-       model in the Snowflake Model Registry AND links the version to this
-       experiment run in a single call.
-    7. **Artifact upload** — diagnostic plots (double-lift, Lorenz/Gini) are
-       saved to ``/tmp`` and uploaded via ``log_artifact``; they appear in the
-       Artifacts tab of the run in Snowsight.
+    6. **Diagnostic plots** saved to /tmp; attached as user_files to model
+       registry.
+    7. **Model registration** with sample_input_data and user_files.
 
     Args:
         session:       Active Snowpark session.
@@ -312,20 +155,20 @@ def train(
     Note:
         Do NOT call ``session.use_warehouse()`` inside this function.  When
         running as an ML Job the warehouse is configured at submission time
-        via the ``query_warehouse`` argument to ``submit_file``; issuing
+        via the ``query_warehouse`` argument to ``submit_directory``; issuing
         ``USE WAREHOUSE`` from inside the container is rejected by Snowflake.
+
+        USE ROLE is handled by ``create_session()`` and must not be called
+        separately — inside an ML Job container, role switching is restricted.
     """
-    # Set role, database, and schema explicitly so the function is portable
+    # Set database and schema explicitly so the function is portable
     # across execution environments (local, ML Job, Snowflake Notebook).
-    session.sql(f"USE ROLE {ROLE}").collect()
     session.use_database(DATABASE)
     session.use_schema(SCHEMA)
 
     # ── 1. Experiment Tracking setup ─────────────────────────────────────────
     # ExperimentTracking is an MLflow-compatible singleton.  ``set_experiment``
     # creates the experiment object in Snowflake if it does not already exist.
-    # ``start_run`` opens a run context; ``end_run`` (called in ``finally``)
-    # closes it and persists all logged data.
     # Docs: https://docs.snowflake.com/en/developer-guide/snowflake-ml/experiment-tracking
     tracker = ExperimentTracking(
         session=session,
@@ -333,9 +176,8 @@ def train(
         schema_name=SCHEMA,
     )
     tracker.set_experiment(EXPERIMENT)
-    tracker.start_run(run_name=model_version)
 
-    try:
+    with tracker.start_run(run_name=model_version):
         # ── 2. Load pre-built Feature Store datasets ──────────────────────────
         # ``load_dataset`` reads a versioned dataset that was generated by the
         # Feature Store (``fs.generate_dataset``).  The dataset is stored as a
@@ -474,19 +316,21 @@ def train(
         # per-epoch training loss.
         tracker.log_metrics({"val_rmse": val_rmse, "val_mae": val_mae})
 
-        # ── 6. Log model ──────────────────────────────────────────────────────
-        # ``tracker.log_model`` does two things in one call:
-        #   (a) registers the fitted model as a versioned entry in the Snowflake
-        #       Model Registry (visible under AI & ML → Models in Snowsight), and
-        #   (b) links that model version back to this experiment run so the run
-        #       record shows which model it produced.
-        # ``target_platforms`` controls where the model can be served:
-        #   WAREHOUSE  → mv.run() for batch scoring on a virtual warehouse
-        #   SNOWPARK_CONTAINER_SERVICES → mv.run_batch() on a compute pool
-        # Note: linear models use SHAP's LinearExplainer rather than TreeSHAP.
-        # enable_explainability is omitted here as support varies by model type;
-        # coefficient inspection (glm.to_sklearn().coef_) provides interpretability
-        # for GLMs without requiring SHAP.
+        # ── 6. Generate diagnostic plots ──────────────────────────────────────
+        # Plots are generated before log_model so they can be attached as
+        # user_files — they travel with the model in the registry.
+        df_val = val_sdf.to_pandas()
+        df_val["PREDICTED_PURE_PREMIUM"] = glm.predict(val_sdf).to_pandas()[
+            "PREDICTED_PURE_PREMIUM"
+        ]
+        plot_paths = generate_diagnostic_plots(df_val, "GLM")
+
+        # ── 7. Log model ──────────────────────────────────────────────────────
+        # tracker.log_model registers the model in the registry AND links it
+        # to this experiment run.  user_files attaches the diagnostic plots
+        # directly to the model version.
+        # Note: enable_explainability is omitted — coefficient inspection via
+        # glm.to_sklearn().coef_ provides GLM interpretability without SHAP.
         # Docs: https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview
         tracker.log_model(
             model=glm,
@@ -495,48 +339,14 @@ def train(
             comment="Tweedie GLM (power=1.5, log link) for homeowners pure premium pricing.",
             metrics={"val_rmse": val_rmse, "val_mae": val_mae},
             target_platforms=["WAREHOUSE", "SNOWPARK_CONTAINER_SERVICES"],
+            sample_input_data=train_sdf.select(feature_cols).limit(10),
+            user_files={"artifacts": plot_paths},
         )  # type: ignore
 
-        # ── 7. Generate and upload diagnostic plots ───────────────────────────
-        # Plots are saved to /tmp (available in both local and SPCS container
-        # environments) then uploaded via ``log_artifact``.  Artifacts are
-        # stored in the experiment's internal Snowflake stage and appear in the
-        # Artifacts tab of the run in Snowsight.
-        df_val = val_sdf.to_pandas()
-        df_val["PREDICTED_PURE_PREMIUM"] = glm.predict(val_sdf).to_pandas()[
-            "PREDICTED_PURE_PREMIUM"
-        ]
-        # double_lift_chart expects y_true="PurePremium" (camelCase) by default.
-        df_val["PurePremium"] = df_val["PURE_PREMIUM"]
-
-        # double_lift_chart creates and returns its own figure — no plt.subplots()
-        # call is needed before it.
-        fig_lift = double_lift_chart(
-            df_val, {"GLM": df_val["PREDICTED_PURE_PREMIUM"].values}, n_bins=10
-        )
-        fig_lift.savefig("/tmp/double_lift.png", dpi=150, bbox_inches="tight")
-        plt.close(fig_lift)
-
-        fig_gini, ax = plt.subplots(figsize=(8, 8))
-        cum_exp, cum_claims = lorenz_curve(
-            df_val["PURE_PREMIUM"], df_val["PREDICTED_PURE_PREMIUM"], df_val["EXPOSURE"]
-        )
-        gini = 1 - 2 * auc(cum_exp, cum_claims)
-        ax.plot(cum_exp, cum_claims, label=f"GLM (Gini={gini:.3f})")
-        ax.plot([0, 1], [0, 1], "--k", label="Random")
-        ax.legend()
-        fig_gini.savefig("/tmp/gini_lorenz.png", dpi=150, bbox_inches="tight")
-        plt.close(fig_gini)
-
-        tracker.log_artifact("/tmp/double_lift.png")
-        tracker.log_artifact("/tmp/gini_lorenz.png")
+        for path in plot_paths:
+            tracker.log_artifact(path)
 
         print(f"Registered model ACTUARIAL_GLM {model_version}")
-
-    finally:
-        # end_run() must be called even if training fails so the run is not
-        # left open in the Experiments UI.
-        tracker.end_run()
 
 
 if __name__ == "__main__":
@@ -546,7 +356,7 @@ if __name__ == "__main__":
     # uniquely named model version (e.g. "TRAIN_GLM_4D0EA6A1_UGW82GXDBQB") with
     # zero manual bookkeeping.  The version is also the experiment run name,
     # so the model version and the run that produced it share the same ID.
-    # Falls back to "v1" for local runs where the env var is not set.
+    # Defaults to "v1" if not running as an ML Job.
     default_version = os.environ.get("SNOWFLAKE_SERVICE_NAME", "v1")
 
     parser = argparse.ArgumentParser(description="Train actuarial Tweedie GLM model.")
@@ -573,7 +383,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    session = _get_session()
+    session = create_session()
     train(
         session,
         ds_version=args.ds_version,
