@@ -36,13 +36,15 @@ python src/load_actuarial_data.py
 ```
 
 Downloads the freMTPL2 dataset from [OpenML](https://www.openml.org/d/41214),
-converts it to XML, and uploads it to the Snowflake stage (~2 min).
+converts it to XML, uploads it to the Snowflake stage, and creates the
+`HOME_POLICY_FREQ` and `HOME_POLICY_SEV` tables (~2 min).
 Pass `--help` for authentication options.
 
-### 3. Create tables
+### 3. Create tables (optional)
 
-Run `create-table.sql` in a Snowflake worksheet.
-Parses the staged XML into `HOME_POLICY_FREQ` and `HOME_POLICY_SEV`.
+Run `create-table.sql` in a Snowflake worksheet to re-create the tables from
+the staged XML. This is only needed if you want to reload without re-running the
+Python script — `load_actuarial_data.py` already creates both tables.
 
 ### 4. Run the notebook
 
@@ -163,7 +165,9 @@ function. This works because `train.py` registers models with
 
 | Error | Cause | Fix |
 |---|---|---|
-| `'ACTUARIAL_TRAINING' does not exist` | Snowpark ML stored proc doesn't inherit notebook schema context | Call `.cache_result()` on training DataFrames before `fit()` |
+| `Dataset ACTUARIAL_TRAINING does not exist` | Feature Store datasets haven't been generated yet | Run the notebook through Section 6 (Feature Store) before submitting `train.py` |
+| `'ACTUARIAL_TRAINING' does not exist` (during `fit()`) | Snowpark ML stored proc doesn't inherit notebook schema context | Call `.cache_result()` on training DataFrames before `fit()` |
+| `Stage 'PAYLOAD_STAGE' does not exist or not authorized` | Stage owned by ACCOUNTADMIN, demo role lacks access | Transfer ownership: `GRANT OWNERSHIP ON STAGE PAYLOAD_STAGE TO ROLE ACTUARIAL_DEMO_ROLE COPY CURRENT GRANTS` |
 | `Stages cannot currently be created in a personal database` | `submit_file` trying to create the payload stage in a personal DB | Pre-create the stage in your schema; use a fully-qualified `stage_name` |
 | `USE WAREHOUSE` rejected in ML Job | `USE WAREHOUSE` is blocked inside SPCS containers | Pass `query_warehouse=WAREHOUSE` to `submit_file`; do not call `use_warehouse()` in the script |
 | `Object does not exist` on `USE WAREHOUSE` | Job session role doesn't have USAGE on the warehouse | `GRANT USAGE ON WAREHOUSE <wh> TO ROLE <role>` |

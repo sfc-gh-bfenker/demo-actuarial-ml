@@ -71,6 +71,11 @@ CREATE STAGE IF NOT EXISTS DATA_STAGE;     -- raw XML upload target
 CREATE STAGE IF NOT EXISTS OUTPUT_STAGE;  -- model artefacts / exports
 CREATE STAGE IF NOT EXISTS PAYLOAD_STAGE; -- ML Job payload uploads
 
+-- Transfer stage ownership so the demo role can write to them.
+GRANT OWNERSHIP ON STAGE DATA_STAGE     TO ROLE IDENTIFIER($role_name) COPY CURRENT GRANTS;
+GRANT OWNERSHIP ON STAGE OUTPUT_STAGE   TO ROLE IDENTIFIER($role_name) COPY CURRENT GRANTS;
+GRANT OWNERSHIP ON STAGE PAYLOAD_STAGE  TO ROLE IDENTIFIER($role_name) COPY CURRENT GRANTS;
+
 -- =============================================================================
 -- ⑥  Next steps
 -- =============================================================================

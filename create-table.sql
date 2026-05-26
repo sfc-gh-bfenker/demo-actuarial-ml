@@ -41,13 +41,13 @@ CREATE OR REPLACE TABLE RAW_CLAIM_XML  (SRC VARIANT);
 -- =============================================================================
 
 COPY INTO RAW_POLICY_XML
-FROM @DATA_STAGE/
+FROM @STAGING/inbound/
 PATTERN      = '.*policy_freq.*'
 FILE_FORMAT  = (FORMAT_NAME = XML_FF)
 PURGE        = FALSE;
 
 COPY INTO RAW_CLAIM_XML
-FROM @DATA_STAGE/
+FROM @STAGING/inbound/
 PATTERN      = '.*policy_sev.*'
 FILE_FORMAT  = (FORMAT_NAME = XML_FF)
 PURGE        = FALSE;
