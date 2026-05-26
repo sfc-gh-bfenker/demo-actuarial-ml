@@ -51,7 +51,7 @@ These files contain Snowflake object names directly (they cannot import from `co
 and need updating if you rename objects:
 
 - `notebooks/data_dictionary_guide.ipynb` — `ACTUARIAL_DEMO_DB` appears in SQL cells (~15 places); do a find-and-replace in the raw file
-- `train-handson.py` — standalone training script; update the inline constants (lines 23, 73–76)
+- `train-handson.py` — standalone training script; update the inline constants (lines 73–76)
 
 ## Keeping customized values out of git
 
