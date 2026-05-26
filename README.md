@@ -154,7 +154,7 @@ function. This works because `train.py` registers models with
 |---|---|
 | `config.py` | Single place to configure database, schema, role, warehouse, compute pool |
 | `actuarial_pricing_demo.ipynb` | Interactive demo notebook |
-| `train.py` | Standalone training script for ML Jobs — update the 4 constants at the top to match `config.py` |
+| `train.py` | Standalone training script for ML Jobs (imports from `config.py`) |
 | `create-table.sql` | Pure-SQL data loading from XML stage |
 | `load_actuarial_data.py` | Downloads freMTPL2 and uploads as XML (run locally) |
 | `helpers.py` | `lorenz_curve` and `double_lift_chart` plotting utilities |
